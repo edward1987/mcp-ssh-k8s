@@ -27,7 +27,7 @@ Other clients (Claude Code/Desktop) use the bearer-token endpoint directly.
 - Every call is logged to `data/audit.jsonl` (no secrets).
 
 ## Import
-UI > Import: `~/.ssh/config` (+ referenced keys) or Termius CSV (hosts only; Termius does not export private keys).
+UI > Import: `~/.ssh/config` (+ referenced keys), Termius CSV, or **the Termius desktop app on this PC (Windows, automatic)**. The last one reads Termius' local database offline (read-only copy), decrypts it with the local key from Windows Credential Manager, and imports hosts, groups, passwords and private keys (with passphrases) into the encrypted vault. One-time helper setup (Python venv in `data/py` + ccl_chromium_reader from GitHub) is done from the same screen. Secrets never reach the browser during the preview.
 
 ## Not done yet
 ProxyJump, file upload/download, Argon2id (scrypt used to avoid native deps).

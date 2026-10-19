@@ -8,6 +8,7 @@ import ssh2 from "ssh2";
 const { utils } = ssh2;
 import { parseSshConfig, type ImportedHost } from "../import/sshconfig.js";
 import { parseTermiusCsv } from "../import/termius.js";
+import { buildFromDump, helperReady, readLocalKeys, runDump, setupHelper, termiusDbDir, type TermiusImport } from "../import/termiusLocal.js";
 import { findHost, formatResult, type Ctx } from "../service.js";
 import { runSsh } from "../ssh/exec.js";
 import type { TunnelManager } from "../tunnel/manager.js";
@@ -16,7 +17,7 @@ import { sha256, type Host, type Mode } from "../vault/store.js";
 
 const MODES: Mode[] = ["read-only", "approval", "free"];
 
-export function startAdmin(ctx: Ctx, port: number, webDir: string, tunnel: TunnelManager) {
+export function startAdmin(ctx: Ctx, port: number, webDir: string, tunnel: TunnelManager, opts: { dataDir: string; scriptsDir: string }) {
   const { vault, audit, approvals } = ctx;
   const app = express();
   app.disable("x-powered-by");
@@ -357,6 +358,106 @@ export function startAdmin(ctx: Ctx, port: number, webDir: string, tunnel: Tunne
       }
       vault.save();
       return { added, skipped };
+    }),
+  );
+
+  // ---- Termius desktop (local, offline) import ----
+  const tSessions = new Map<string, { data: TermiusImport; exp: number }>();
+  const dataDir = opts.dataDir;
+  app.get(
+    "/api/import/termius-local/status",
+    auth,
+    wrap(() => ({
+      supported: process.platform === "win32",
+      termiusFound: !!termiusDbDir(),
+      helperReady: process.platform === "win32" && helperReady(dataDir),
+    })),
+  );
+  app.post("/api/import/termius-local/setup", auth, wrap(() => setupHelper(dataDir)));
+  app.post(
+    "/api/import/termius-local/scan",
+    auth,
+    wrap(() => {
+      if (!termiusDbDir()) throw new Error("Termius desktop data not found on this PC (%APPDATA%/Termius)");
+      if (!helperReady(dataDir)) throw new Error("run the one-time helper setup first");
+      const data = buildFromDump(runDump(dataDir, join(opts.scriptsDir, "termius_dump.py")), readLocalKeys());
+      const id = randomUUID();
+      for (const [k, v] of tSessions) if (v.exp < Date.now()) tSessions.delete(k);
+      tSessions.set(id, { data, exp: Date.now() + 10 * 60_000 });
+      const keyLabel = new Map(data.keys.map((k) => [k.id, k.label]));
+      // Secrets never leave the server: the browser only gets labels and flags.
+      return {
+        session: id,
+        stats: data.stats,
+        hosts: data.hosts.map((h) => ({
+          id: h.termiusId,
+          group: h.group,
+          name: h.name,
+          address: h.address,
+          port: h.port,
+          user: h.user,
+          auth: h.keyId != null ? "key" : h.password ? "password" : "none",
+          keyLabel: h.keyId != null ? keyLabel.get(h.keyId) : undefined,
+          exists: vault.d.hosts.some((x) => x.hostname === h.address && x.port === h.port && x.user === h.user),
+        })),
+      };
+    }),
+  );
+  app.post(
+    "/api/import/termius-local/commit",
+    auth,
+    wrap((req) => {
+      const s = tSessions.get(String(req.body.session));
+      if (!s || s.exp < Date.now()) throw new Error("scan expired, scan again");
+      const mode: Mode = MODES.includes(req.body.mode) ? req.body.mode : "approval";
+      const want = new Set<number>((req.body.ids ?? []).map(Number));
+      const keyMap = new Map<number, string>();
+      const skipped: string[] = [];
+      let added = 0, keysAdded = 0;
+      const taken = new Set(vault.d.hosts.map((h) => h.name.toLowerCase()));
+      for (const h of s.data.hosts) {
+        if (!want.has(h.termiusId)) continue;
+        if (vault.d.hosts.some((x) => x.hostname === h.address && x.port === h.port && x.user === h.user)) {
+          skipped.push(h.name);
+          continue;
+        }
+        let keyId: string | undefined;
+        if (h.keyId != null) {
+          keyId = keyMap.get(h.keyId);
+          const k = s.data.keys.find((x) => x.id === h.keyId);
+          if (!keyId && k) {
+            try {
+              keyId = addKey(`Termius: ${k.label}`, k.privateKey, k.passphrase).id;
+              keyMap.set(h.keyId, keyId);
+              keysAdded++;
+            } catch {
+              skipped.push(`${h.name} (key unreadable)`);
+              continue;
+            }
+          }
+        }
+        let name = h.name;
+        if (taken.has(name.toLowerCase())) name = `${h.name} (${h.user || "?"}@${h.address}${h.port === 22 ? "" : ":" + h.port})`;
+        for (let i = 2; taken.has(name.toLowerCase()); i++) name = `${h.name} #${i}`;
+        taken.add(name.toLowerCase());
+        vault.d.hosts.push({
+          id: randomUUID(),
+          name,
+          hostname: h.address,
+          port: h.port,
+          user: h.user || "root",
+          auth: keyId ? "key" : "password",
+          keyId,
+          password: keyId ? undefined : h.password,
+          mode,
+          allowlist: [],
+          group: h.group,
+        });
+        added++;
+      }
+      vault.save();
+      tSessions.delete(String(req.body.session));
+      return { added, keysAdded, skipped };
     }),
   );
 

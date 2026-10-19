@@ -141,6 +141,7 @@ const views = {
       <div class="card"><h3>Din Termius (CSV)</h3>
         <p class="mut">Termius nu exportă cheile private: după import, atașează cheile din tab-ul Chei și editează hosturile. Dacă ai parole în CSV, ele sunt criptate în vault.</p>
         <input type="file" id="i-file" accept=".csv,text/csv"></div>
+      <div class="card"><h3>Din aplicația Termius de pe acest PC (automat)</h3><div id="tl"><span class="mut">se verifică...</span></div></div>
       <div id="preview"></div>`;
     const preview = (hosts) => {
       const p = document.getElementById("preview");
@@ -164,6 +165,46 @@ const views = {
     };
     document.getElementById("i-scan").onclick = act(async () => preview(await api("POST", "/api/import/sshconfig", { path: val("i-path") || undefined })));
     document.getElementById("i-file").onchange = act(async (e) => preview(await api("POST", "/api/import/termius", { text: await e.target.files[0].text() })));
+    // ---- Termius desktop (local, automat) ----
+    const tl = document.getElementById("tl");
+    const tlDraw = async () => {
+      const st = await api("GET", "/api/import/termius-local/status");
+      if (!st.supported) return (tl.innerHTML = '<p class="mut">Disponibil doar pe Windows.</p>');
+      if (!st.termiusFound) return (tl.innerHTML = '<p class="mut">Aplicația Termius desktop nu a fost găsită pe acest PC (datele ei sunt în %APPDATA%/Termius).</p>');
+      tl.innerHTML = st.helperReady
+        ? '<button class="b p" id="tl-scan">Scanează Termius</button> <span class="mut">Citește local, offline, hosturile, parolele și cheile. Nu trimite nimic nicăieri.</span>'
+        : '<p class="mut">Pas unic: instalez un mic ajutor Python (ccl_chromium_reader, din GitHub) într-un mediu izolat în <code>data/py</code>. Necesită Python 3, git și internet; durează ~1 minut.</p><button class="b p" id="tl-setup">Pregătește importul</button>';
+      const setup = document.getElementById("tl-setup");
+      if (setup) setup.onclick = act(async () => { setup.disabled = true; setup.textContent = "se instalează..."; try { await api("POST", "/api/import/termius-local/setup", {}); } finally { await tlDraw(); } });
+      const scan = document.getElementById("tl-scan");
+      if (scan) scan.onclick = act(async () => { scan.disabled = true; scan.textContent = "se citește..."; try { tlPreview(await api("POST", "/api/import/termius-local/scan", {})); } finally { scan.disabled = false; scan.textContent = "Scanează Termius"; } });
+    };
+    const tlPreview = (r) => {
+      const p = document.getElementById("preview");
+      const rows = r.hosts;
+      const authLabel = (h) => (h.auth === "key" ? "cheie: " + esc(h.keyLabel || "") : h.auth === "password" ? "parolă" : '<span class="bad">fără credențiale</span>');
+      p.innerHTML = `<div class="card"><h3>Termius: ${rows.length} hosturi, ${r.stats.keys} chei, ${r.stats.groups} grupuri</h3>
+        <div class="row"><input id="tl-filter" placeholder="Caută..." style="max-width:260px">
+          <button class="b" id="tl-all">Selectează tot</button><button class="b" id="tl-none">Nimic</button>
+          <label style="margin:0">Mod siguranță: <select id="tl-mode" style="width:auto"><option value="approval">approval</option><option value="read-only">read-only</option><option value="free">free</option></select></label></div>
+        <table id="tl-table"><tr><th></th><th>Grup</th><th>Nume</th><th>Adresă</th><th>User</th><th>Autentificare</th></tr>
+        ${rows.map((h) => `<tr data-q="${esc((h.group + " " + h.name + " " + h.address + " " + h.user).toLowerCase())}"><td><input type="checkbox" style="width:auto" data-id="${h.id}" ${h.exists ? "" : "checked"}></td>
+          <td>${esc(h.group || "")}</td><td>${esc(h.name)}${h.exists ? ' <span class="tag">există deja</span>' : ""}</td><td>${esc(h.address)}:${h.port}</td><td>${esc(h.user)}</td><td>${authLabel(h)}</td></tr>`).join("")}</table>
+        <p class="mut">Cheile folosite de hosturile selectate se copiază criptat în vault. Hosturile pornesc în modul ales mai sus (recomandat: approval).</p>
+        <p><button class="b p" id="tl-commit">Importă selecția</button></p></div>`;
+      const visible = () => [...p.querySelectorAll("#tl-table tr[data-q]")].filter((tr) => tr.style.display !== "none");
+      document.getElementById("tl-filter").oninput = (e) => { const q = e.target.value.toLowerCase(); p.querySelectorAll("#tl-table tr[data-q]").forEach((tr) => (tr.style.display = tr.dataset.q.includes(q) ? "" : "none")); };
+      document.getElementById("tl-all").onclick = () => visible().forEach((tr) => (tr.querySelector("input").checked = true));
+      document.getElementById("tl-none").onclick = () => visible().forEach((tr) => (tr.querySelector("input").checked = false));
+      document.getElementById("tl-commit").onclick = act(async () => {
+        const ids = [...p.querySelectorAll("[data-id]")].filter((c) => c.checked).map((c) => +c.dataset.id);
+        if (!ids.length) throw new Error("nu ai selectat nimic");
+        const out = await api("POST", "/api/import/termius-local/commit", { session: r.session, ids, mode: val("tl-mode") });
+        alert(`Importate: ${out.added} hosturi, ${out.keysAdded} chei.` + (out.skipped.length ? `\nSărite (${out.skipped.length}): ${out.skipped.slice(0, 15).join(", ")}` : ""));
+        tab = "hosts"; render();
+      });
+    };
+    await tlDraw();
   },
 
   async chatgpt() {

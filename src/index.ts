@@ -19,7 +19,7 @@ const ctx = {
 const mcpPort = Number(process.env.MCP_PORT ?? 7778);
 const tunnel = new TunnelManager(ctx.vault, dataDir, mcpPort);
 
-startAdmin(ctx, Number(process.env.ADMIN_PORT ?? 7777), join(root, "web"), tunnel);
+startAdmin(ctx, Number(process.env.ADMIN_PORT ?? 7777), join(root, "web"), tunnel, { dataDir, scriptsDir: join(root, "scripts") });
 startMcp(ctx, mcpPort);
 
 for (const sig of ["SIGINT", "SIGTERM"] as const)
