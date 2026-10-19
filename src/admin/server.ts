@@ -9,11 +9,12 @@ const { utils } = ssh2;
 import { parseSshConfig, type ImportedHost } from "../import/sshconfig.js";
 import { parseTermiusCsv } from "../import/termius.js";
 import { buildFromDump, helperReady, readLocalKeys, runDump, setupHelper, termiusDbDir, type TermiusImport } from "../import/termiusLocal.js";
+import { inspectKubeconfig, runKubectl } from "../k8s/kubectl.js";
 import { findHost, formatResult, type Ctx } from "../service.js";
 import { runSsh } from "../ssh/exec.js";
 import type { TunnelManager } from "../tunnel/manager.js";
 import { normalizeKey } from "../vault/keys.js";
-import { sha256, type Host, type Mode } from "../vault/store.js";
+import { sha256, type Cluster, type Host, type Mode } from "../vault/store.js";
 
 const MODES: Mode[] = ["read-only", "approval", "free"];
 
@@ -28,6 +29,7 @@ export function startAdmin(ctx: Ctx, port: number, webDir: string, tunnel: Tunne
     sessions.clear();
     approvals.denyAll();
     tunnel.stop();
+    ctx.monitor?.stop();
   };
   const allowedHosts = new Set([`127.0.0.1:${port}`, `localhost:${port}`]);
   let loginFails = 0;
@@ -82,6 +84,7 @@ export function startAdmin(ctx: Ctx, port: number, webDir: string, tunnel: Tunne
     "/api/setup",
     wrap(async (req, res) => {
       await vault.create(String(req.body.password ?? ""));
+      ctx.monitor?.start();
       return { csrf: startSession(res) };
     }),
   );
@@ -102,6 +105,7 @@ export function startAdmin(ctx: Ctx, port: number, webDir: string, tunnel: Tunne
       }
       loginFails = 0;
       tunnel.autoStart();
+      ctx.monitor?.start();
       return { csrf: startSession(res) };
     }),
   );
@@ -110,8 +114,14 @@ export function startAdmin(ctx: Ctx, port: number, webDir: string, tunnel: Tunne
   // ---- hosts ----
   const publicHost = (h: Host) => {
     const k = vault.d.keys.find((x) => x.id === h.keyId);
+    const st = ctx.monitor?.get(h);
     return {
       ...h,
+      online: st?.online,
+      checking: ctx.monitor?.checking,
+      checkedAt: st?.checkedAt,
+      latencyMs: st?.ms,
+      offlineReason: st?.error,
       password: undefined,
       hasPassword: !!h.password,
       fingerprint: vault.d.knownHosts[h.id],
@@ -143,6 +153,26 @@ export function startAdmin(ctx: Ctx, port: number, webDir: string, tunnel: Tunne
     };
   };
   app.get("/api/hosts", auth, wrap(() => vault.d.hosts.map(publicHost)));
+  app.post(
+    "/api/hosts/mode",
+    auth,
+    wrap((req) => {
+      if (!MODES.includes(req.body.mode)) throw new Error("invalid mode");
+      const ids = new Set<string>(Array.isArray(req.body.ids) ? req.body.ids.map(String) : []);
+      let n = 0;
+      for (const h of vault.d.hosts) if (ids.has(h.id)) (h.mode = req.body.mode), n++;
+      if (n) vault.save();
+      return { updated: n };
+    }),
+  );
+  app.post(
+    "/api/hosts/check",
+    auth,
+    wrap(() => {
+      void ctx.monitor?.check().catch(() => {}); // fire and forget; the UI picks up results as they arrive
+      return { checking: true };
+    }),
+  );
   app.post(
     "/api/hosts",
     auth,
@@ -242,6 +272,68 @@ export function startAdmin(ctx: Ctx, port: number, webDir: string, tunnel: Tunne
       if (vault.d.hosts.some((h) => h.keyId === req.params.id)) throw new Error("key is used by a host");
       vault.d.keys = vault.d.keys.filter((k) => k.id !== req.params.id);
       vault.save();
+    }),
+  );
+
+  // ---- Kubernetes clusters (kubeconfig uploads) ----
+  const publicCluster = (c: Cluster) => {
+    let info: ReturnType<typeof inspectKubeconfig> | undefined;
+    try {
+      info = inspectKubeconfig(c.kubeconfig);
+    } catch {}
+    return { id: c.id, name: c.name, context: c.context, namespace: c.namespace, mode: c.mode, group: c.group, info };
+  };
+  const readCluster = (b: any, old?: Cluster): Cluster => {
+    const name = String(b.name ?? "").trim();
+    if (!name) throw new Error("name is required");
+    if (!MODES.includes(b.mode)) throw new Error("invalid mode");
+    if (vault.d.clusters.some((c) => c.name.toLowerCase() === name.toLowerCase() && c.id !== old?.id)) throw new Error("a cluster with this name already exists");
+    const kubeconfig = b.kubeconfig ? String(b.kubeconfig) : old?.kubeconfig;
+    if (!kubeconfig) throw new Error("upload a kubeconfig file");
+    const info = inspectKubeconfig(kubeconfig);
+    const context = b.context ? String(b.context) : undefined;
+    if (context && !info.contexts.includes(context)) throw new Error(`context "${context}" is not in the kubeconfig (${info.contexts.join(", ")})`);
+    return { id: old?.id ?? randomUUID(), name, kubeconfig, context, namespace: b.namespace ? String(b.namespace).trim() : undefined, mode: b.mode, group: b.group || undefined };
+  };
+  app.get("/api/clusters", auth, wrap(() => vault.d.clusters.map(publicCluster)));
+  app.post(
+    "/api/clusters",
+    auth,
+    wrap((req) => {
+      const c = readCluster(req.body);
+      vault.d.clusters.push(c);
+      vault.save();
+      return publicCluster(c);
+    }),
+  );
+  app.put(
+    "/api/clusters/:id",
+    auth,
+    wrap((req) => {
+      const i = vault.d.clusters.findIndex((c) => c.id === req.params.id);
+      if (i < 0) throw new Error("not found");
+      const c = readCluster(req.body, vault.d.clusters[i]);
+      vault.d.clusters[i] = c;
+      vault.save();
+      return publicCluster(c);
+    }),
+  );
+  app.delete(
+    "/api/clusters/:id",
+    auth,
+    wrap((req) => {
+      vault.d.clusters = vault.d.clusters.filter((c) => c.id !== req.params.id);
+      vault.save();
+    }),
+  );
+  app.post(
+    "/api/clusters/:id/test",
+    auth,
+    wrap(async (req) => {
+      const c = vault.d.clusters.find((x) => x.id === req.params.id);
+      if (!c) throw new Error("not found");
+      const args = ["get", ...(c.context ? ["--context", c.context] : []), "--request-timeout=15s", "--raw", "/version"];
+      return { output: formatResult(await runKubectl(c.kubeconfig, args, { timeoutSec: 30, maxBytes: 20_000 })) };
     }),
   );
 

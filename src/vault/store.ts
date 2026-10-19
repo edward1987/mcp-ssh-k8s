@@ -28,6 +28,16 @@ export interface Key {
   publicKey?: string;
 }
 
+export interface Cluster {
+  id: string;
+  name: string;
+  kubeconfig: string; // full kubeconfig YAML, stored encrypted in the vault
+  context?: string; // empty = the kubeconfig's current-context
+  namespace?: string; // default namespace when a command names none
+  mode: Mode;
+  group?: string;
+}
+
 export interface Token {
   id: string;
   name: string;
@@ -38,6 +48,7 @@ export interface Token {
 export interface VaultData {
   hosts: Host[];
   keys: Key[];
+  clusters: Cluster[];
   tokens: Token[];
   knownHosts: Record<string, string>; // host id -> fingerprint
   settings: { autoLockMinutes: number; maxOutputBytes: number; approvalTimeoutSec: number };
@@ -48,6 +59,7 @@ export interface VaultData {
 const empty = (): VaultData => ({
   hosts: [],
   keys: [],
+  clusters: [],
   tokens: [],
   knownHosts: {},
   settings: { autoLockMinutes: 30, maxOutputBytes: 65536, approvalTimeoutSec: 120 },

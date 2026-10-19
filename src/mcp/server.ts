@@ -2,7 +2,7 @@ import express from "express";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { z } from "zod";
-import { findHost, formatResult, runCommand, shq, type Ctx } from "../service.js";
+import { findHost, formatResult, runCommand, runKube, shq, type Ctx } from "../service.js";
 
 function buildServer(ctx: Ctx, client: string) {
   const server = new McpServer({ name: "mcp-ssh", version: "0.1.0" });
@@ -17,11 +17,11 @@ function buildServer(ctx: Ctx, client: string) {
 
   server.registerTool(
     "list_hosts",
-    { description: "List configured SSH hosts (name, address, user, safety mode). Never returns secrets." },
+    { description: "List reachable SSH hosts (name, address, user, safety mode); hosts that are offline are omitted. Never returns secrets." },
     async () =>
       guard(async () =>
         JSON.stringify(
-          ctx.vault.d.hosts.map((h) => ({ name: h.name, address: `${h.hostname}:${h.port}`, user: h.user, mode: h.mode, group: h.group, tags: h.tags })),
+          ctx.vault.d.hosts.filter((h) => ctx.monitor?.isOnline(h) ?? true).map((h) => ({ name: h.name, address: `${h.hostname}:${h.port}`, user: h.user, mode: h.mode, group: h.group, tags: h.tags })),
           null,
           2,
         ),
@@ -68,6 +68,29 @@ function buildServer(ctx: Ctx, client: string) {
         return out.join("\n\n");
       });
     },
+  );
+
+  server.registerTool(
+    "list_clusters",
+    { description: "List the Kubernetes clusters available to the kubectl tool (name, context, default namespace, safety mode). Never returns credentials." },
+    async () =>
+      guard(async () => JSON.stringify(ctx.vault.d.clusters.map((c) => ({ name: c.name, context: c.context, namespace: c.namespace, mode: c.mode, group: c.group })), null, 2)),
+  );
+
+  server.registerTool(
+    "kubectl",
+    {
+      description:
+        "Run kubectl against a stored cluster. Pass the arguments WITHOUT the leading 'kubectl' (e.g. 'get pods -A', 'describe node n1', 'logs deploy/api --tail=100'); start with the subcommand, flags after it. No shell: pipes/redirects do not work, use -o jsonpath or -o json instead. Cluster safety mode applies: read-only clusters accept only get/describe/logs/top/events/explain/version/api-resources/auth can-i/rollout status (no Secrets, no watch/follow); approval clusters wait for the operator to approve in the web UI. To apply or create from YAML, pass it in 'manifest' and use '-f -'.",
+      inputSchema: {
+        cluster: z.string().describe("Cluster name from list_clusters"),
+        args: z.string().min(1).describe("kubectl arguments, without the 'kubectl' prefix"),
+        manifest: z.string().max(500_000).optional().describe("YAML/JSON piped to stdin; use together with '-f -'"),
+        timeout_seconds: z.number().int().min(1).max(600).default(60).optional(),
+      },
+    },
+    async ({ cluster, args, manifest, timeout_seconds }) =>
+      guard(async () => formatResult(await runKube(ctx, client, cluster, args, manifest, timeout_seconds ?? 60))),
   );
 
   return server;

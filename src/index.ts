@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 import { startAdmin } from "./admin/server.js";
 import { Audit } from "./audit.js";
 import { startMcp } from "./mcp/server.js";
+import { HostMonitor } from "./health.js";
 import { Approvals } from "./policy/policy.js";
 import { TunnelManager } from "./tunnel/manager.js";
 import { Vault } from "./vault/store.js";
@@ -10,10 +11,12 @@ import { Vault } from "./vault/store.js";
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const dataDir = process.env.MCP_SSH_DATA ?? join(root, "data");
 
+const vault = new Vault(join(dataDir, "vault.json"));
 const ctx = {
-  vault: new Vault(join(dataDir, "vault.json")),
+  vault,
   audit: new Audit(join(dataDir, "audit.jsonl")),
   approvals: new Approvals(),
+  monitor: new HostMonitor(vault),
 };
 
 const mcpPort = Number(process.env.MCP_PORT ?? 7778);

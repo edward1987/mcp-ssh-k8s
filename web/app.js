@@ -1,6 +1,7 @@
 "use strict";
 const $app = document.getElementById("app");
-let csrf = null, tab = "hosts", poll = null;
+let csrf = null, tab = "hosts", poll = null, renderSeq = 0;
+const selected = new Set(); // host ids ticked for bulk actions
 
 // ---- helpers ----
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -11,29 +12,33 @@ async function api(method, url, body) {
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   const j = await r.json().catch(() => ({}));
-  if (r.status === 401) { csrf = null; return render(); }
+  if (r.status === 401) { if (csrf) { csrf = null; render(); } throw new Error("locked"); }
   if (!r.ok) throw new Error(j.error || r.statusText);
   return j;
 }
-const act = (fn) => async (...a) => { try { await fn(...a); } catch (e) { alert(e.message); } };
+const act = (fn) => async (...a) => { try { await fn(...a); } catch (e) { if (e.message !== "locked") alert(e.message); } };
 const val = (id) => document.getElementById(id).value;
 const el = (html) => { const t = document.createElement("template"); t.innerHTML = html.trim(); return t.content.firstChild; };
 
 // ---- shell ----
 async function render() {
   clearInterval(poll);
+  const seq = ++renderSeq;
   const st = await fetch("/api/status").then((r) => r.json());
+  if (seq !== renderSeq) return; // a newer render took over
   if (st.unlocked) csrf = st.csrf;
   if (!st.unlocked) return renderLogin(st.exists);
   $app.innerHTML = `
     <header><h1>MCP SSH</h1>
-      <nav>${["hosts", "keys", "import", "chatgpt", "tokens", "approvals", "audit", "settings"]
-        .map((t) => `<button data-t="${t}" class="${t === tab ? "on" : ""}">${{ hosts: "Hosturi", keys: "Chei", import: "Import", chatgpt: "ChatGPT", tokens: "Tokenuri MCP", approvals: "Aprobări", audit: "Audit", settings: "Setări" }[t]}<span id="badge-${t}"></span></button>`).join("")}
+      <nav>${["hosts", "k8s", "keys", "import", "chatgpt", "tokens", "approvals", "audit", "settings"]
+        .map((t) => `<button data-t="${t}" class="${t === tab ? "on" : ""}">${{ hosts: "Hosturi", k8s: "Kubernetes", keys: "Chei", import: "Import", chatgpt: "ChatGPT", tokens: "Tokenuri MCP", approvals: "Aprobări", audit: "Audit", settings: "Setări" }[t]}<span id="badge-${t}"></span></button>`).join("")}
       </nav><button class="b" id="lock">Blochează vault</button></header>
     <main id="view"></main>`;
   $app.querySelectorAll("nav button").forEach((b) => (b.onclick = () => { tab = b.dataset.t; render(); }));
   document.getElementById("lock").onclick = act(async () => { await api("POST", "/api/lock", {}); csrf = null; render(); });
   await views[tab]();
+  if (seq !== renderSeq) return;
+  clearInterval(poll);
   poll = setInterval(act(async () => {
     const a = await api("GET", "/api/approvals");
     const b = document.getElementById("badge-approvals");
@@ -43,6 +48,7 @@ async function render() {
 }
 
 function renderLogin(exists) {
+  if (document.getElementById("login")) return; // already showing: don't wipe what is being typed
   const ac = exists ? "current-password" : "new-password";
   $app.innerHTML = `<form id="login" class="card" autocomplete="on"><h2>${exists ? "Deblochează vault-ul" : "Creează vault-ul"}</h2>
     <p class="mut">${exists ? "Introdu parola master." : "Alege o parolă master (min. 12 caractere). Nu poate fi recuperată - fără ea datele sunt pierdute."}</p>
@@ -64,19 +70,62 @@ function renderLogin(exists) {
 // ---- views ----
 const views = {
   async hosts() {
+    const dot = (h) => `<span data-dot="${h.id}">${h.online === undefined ? "" : h.online ? '<span class="ok" title="accesibil">●</span>' : `<b class="bad" title="${esc(h.offlineReason || "")}">●</b>`}</span>`;
     const [hosts, keys] = await Promise.all([api("GET", "/api/hosts"), api("GET", "/api/keys")]);
     const v = document.getElementById("view");
-    v.innerHTML = `<div class="row" style="justify-content:space-between"><h2>Hosturi</h2><button class="b p" id="new">+ Host nou</button></div>
+    v.innerHTML = `<div class="row" style="justify-content:space-between"><h2>Hosturi</h2><div class="row"><button class="b" id="recheck">Verifică disponibilitatea</button><button class="b p" id="new">+ Host nou</button></div></div>
       <div id="form"></div>
+      ${hosts.length ? `<div class="card row" id="bulk" style="gap:10px;flex-wrap:wrap">
+        <label style="margin:0"><input type="checkbox" id="sel-all" style="width:auto"> toate</label>
+        <select id="sel-group" style="width:auto"><option value="">selectează grup…</option>${[...new Set(hosts.map((h) => h.group).filter(Boolean))].map((g) => `<option>${esc(g)}</option>`).join("")}</select>
+        <span class="mut" id="sel-n"></span>
+        <span style="flex:1"></span>
+        <label style="margin:0">Mod: <select id="bulk-mode" style="width:auto"><option value="approval">approval</option><option value="read-only">read-only</option><option value="free">free</option></select></label>
+        <button class="b p" id="bulk-go">Aplică pe selectate</button></div>` : ""}
       ${hosts.length ? "" : '<p class="mut">Niciun host. Adaugă unul sau folosește Import.</p>'}
       ${hosts.map((h) => `<div class="card"><div class="row" style="justify-content:space-between">
-        <div><b>${esc(h.name)}</b> <span class="mut">${esc(h.user)}@${esc(h.hostname)}:${h.port}</span>
+        <div><input type="checkbox" class="sel" data-id="${h.id}" style="width:auto" ${selected.has(h.id) ? "checked" : ""}> ${dot(h)} <b>${esc(h.name)}</b>${h.online === false ? ' <span class="tag">offline – ascuns din MCP</span>' : ""} <span class="mut">${esc(h.user)}@${esc(h.hostname)}:${h.port}</span>
         <span class="tag">${esc(h.mode)}</span> <span class="tag">${h.auth === "key" ? "cheie" : "parolă"}</span>
         ${h.group ? `<span class="tag">${esc(h.group)}</span>` : ""}
         ${h.auth === "key" ? `<div style="font-size:12px">cheie: <b>${esc(h.keyName || "?")}</b> ${h.keyValid ? '<span class="ok">valid</span>' : '<b class="bad">INVALID (nu conține cheia privată)</b>'} <span class="mut">${esc(h.keyFingerprint || "")}</span></div>` : ""}
         <div class="mut" style="font-size:12px">${h.fingerprint ? "host key: " + esc(h.fingerprint) : "host key nefixat (se fixează la prima conectare)"}</div></div>
         <div class="row"><button class="b" data-test="${h.id}">Test</button><button class="b" data-edit="${h.id}">Editează</button><button class="b d" data-del="${h.id}">Șterge</button></div></div>
         <pre class="hidden" id="out-${h.id}"></pre></div>`).join("")}`;
+    document.getElementById("recheck").onclick = act(async () => {
+      await api("POST", "/api/hosts/check", {});
+      // results land per host while the sweep runs: refresh the dots a few times without blocking the page
+      for (let i = 0; i < 5 && tab === "hosts"; i++) { await new Promise((r) => setTimeout(r, 1500)); if (tab === "hosts") await refreshDots(); }
+    });
+    const hostIds = hosts.map((h) => h.id);
+    const syncSel = () => {
+      for (const id of [...selected]) if (!hostIds.includes(id)) selected.delete(id);
+      v.querySelectorAll(".sel").forEach((c) => (c.checked = selected.has(c.dataset.id)));
+      const all = document.getElementById("sel-all");
+      if (all) { all.checked = hostIds.length > 0 && selected.size === hostIds.length; all.indeterminate = selected.size > 0 && selected.size < hostIds.length; }
+      const n = document.getElementById("sel-n"); if (n) n.textContent = selected.size ? `${selected.size} selectate` : "";
+    };
+    v.querySelectorAll(".sel").forEach((c) => (c.onchange = () => { c.checked ? selected.add(c.dataset.id) : selected.delete(c.dataset.id); syncSel(); }));
+    if (hosts.length) {
+      document.getElementById("sel-all").onchange = (e) => { selected.clear(); if (e.target.checked) hostIds.forEach((id) => selected.add(id)); syncSel(); };
+      document.getElementById("sel-group").onchange = (e) => {
+        if (e.target.value) hosts.filter((h) => h.group === e.target.value).forEach((h) => selected.add(h.id));
+        e.target.value = ""; syncSel();
+      };
+      document.getElementById("bulk-go").onclick = act(async () => {
+        if (!selected.size) throw new Error("Nu e selectat niciun host");
+        const mode = val("bulk-mode");
+        if (mode === "free" && !confirm(`Setezi ${selected.size} hosturi pe FREE? AI-ul va rula orice comandă fără aprobare.`)) return;
+        await api("POST", "/api/hosts/mode", { ids: [...selected], mode });
+        render();
+      });
+      syncSel();
+    }
+    const refreshDots = async () => {
+      for (const h of await api("GET", "/api/hosts")) {
+        const d = document.querySelector(`[data-dot="${h.id}"]`);
+        if (d) d.outerHTML = dot(h);
+      }
+    };
     const form = (h = {}) => {
       const f = document.getElementById("form");
       f.innerHTML = `<div class="card"><div class="grid">
@@ -115,6 +164,50 @@ const views = {
     v.querySelectorAll("[data-test]").forEach((b) => (b.onclick = async () => {
       const o = document.getElementById("out-" + b.dataset.test); o.classList.remove("hidden"); o.textContent = "se conectează...";
       try { o.textContent = (await api("POST", `/api/hosts/${b.dataset.test}/test`, {})).output; } catch (e) { o.textContent = "Eroare: " + e.message; }
+    }));
+  },
+
+  async k8s() {
+    const cl = await api("GET", "/api/clusters");
+    const v = document.getElementById("view");
+    v.innerHTML = `<div class="row" style="justify-content:space-between"><h2>Kubernetes</h2><button class="b p" id="new">+ Cluster nou</button></div>
+      <p class="mut">Încarci fișierul kubeconfig (YAML); se stochează criptat în vault. AI-ul folosește uneltele <code>list_clusters</code> și <code>kubectl</code>. Același mod de siguranță ca la hosturi; în <b>read-only</b> nu poate citi Secrets, nu poate face watch/follow și rulează doar get/describe/logs/top/events etc.</p>
+      <div id="form"></div>
+      ${cl.length ? "" : '<p class="mut">Niciun cluster.</p>'}
+      ${cl.map((c) => `<div class="card"><div class="row" style="justify-content:space-between"><div>
+        <b>${esc(c.name)}</b> <span class="tag">${esc(c.mode)}</span> ${c.group ? `<span class="tag">${esc(c.group)}</span>` : ""}
+        ${c.info ? `<div class="mut" style="font-size:12px">context: <b>${esc(c.context || c.info.currentContext || "?")}</b>${c.namespace ? ` · namespace: <b>${esc(c.namespace)}</b>` : ""} · ${esc(c.info.servers.join(", "))}</div>
+        ${c.info.execCommands.length ? `<div style="font-size:12px" class="bad">rulează local pentru autentificare: ${esc(c.info.execCommands.join(", "))}</div>` : ""}` : '<b class="bad">kubeconfig ilizibil</b>'}</div>
+        <div class="row"><button class="b" data-test="${c.id}">Test</button><button class="b" data-edit="${c.id}">Editează</button><button class="b d" data-del="${c.id}">Șterge</button></div></div>
+        <pre class="hidden" id="out-${c.id}"></pre></div>`).join("")}`;
+    const form = (c = {}) => {
+      const f = document.getElementById("form");
+      const ctxs = c.info?.contexts || [];
+      f.innerHTML = `<div class="card"><div class="grid">
+        <div><label>Nume</label><input id="c-name" value="${esc(c.name)}"></div>
+        <div><label>Fișier kubeconfig ${c.id ? "(gol = neschimbat)" : ""}</label><input id="c-file" type="file"></div>
+        <div><label>Context (gol = current-context)</label><input id="c-ctx" value="${esc(c.context)}" list="c-ctxs"><datalist id="c-ctxs">${ctxs.map((x) => `<option value="${esc(x)}">`).join("")}</datalist></div>
+        <div><label>Namespace implicit (opțional)</label><input id="c-ns" value="${esc(c.namespace)}"></div>
+        <div><label>Mod siguranță</label><select id="c-mode"><option value="approval">approval - aprobi fiecare comandă</option><option value="read-only">read-only - doar citire, fără Secrets</option><option value="free">free - AI-ul rulează orice</option></select></div>
+        <div><label>Grup</label><input id="c-group" value="${esc(c.group)}"></div></div>
+        <p><button class="b p" id="c-save">Salvează</button> <button class="b" id="c-cancel">Anulează</button></p></div>`;
+      document.getElementById("c-mode").value = c.mode || "approval";
+      const file = document.getElementById("c-file");
+      file.onchange = () => { const n = document.getElementById("c-name"); if (!n.value && file.files[0]) n.value = file.files[0].name.replace(/\.(ya?ml|conf|config)$/i, ""); };
+      document.getElementById("c-cancel").onclick = () => (f.innerHTML = "");
+      document.getElementById("c-save").onclick = act(async () => {
+        const body = { name: val("c-name"), context: val("c-ctx"), namespace: val("c-ns"), mode: val("c-mode"), group: val("c-group"), kubeconfig: file.files[0] ? await file.files[0].text() : undefined };
+        if (body.mode === "free" && c.mode !== "free" && !confirm("Mod FREE: AI-ul poate rula orice kubectl (inclusiv delete) fără aprobare. Continui?")) return;
+        await api(c.id ? "PUT" : "POST", c.id ? "/api/clusters/" + c.id : "/api/clusters", body);
+        render();
+      });
+    };
+    document.getElementById("new").onclick = () => form();
+    v.querySelectorAll("[data-edit]").forEach((b) => (b.onclick = () => form(cl.find((c) => c.id === b.dataset.edit))));
+    v.querySelectorAll("[data-del]").forEach((b) => (b.onclick = act(async () => { if (confirm("Ștergi clusterul?")) { await api("DELETE", "/api/clusters/" + b.dataset.del); render(); } })));
+    v.querySelectorAll("[data-test]").forEach((b) => (b.onclick = async () => {
+      const o = document.getElementById("out-" + b.dataset.test); o.classList.remove("hidden"); o.textContent = "se conectează...";
+      try { o.textContent = (await api("POST", `/api/clusters/${b.dataset.test}/test`, {})).output; } catch (e) { o.textContent = "Eroare: " + e.message; }
     }));
   },
 
@@ -231,7 +324,7 @@ const views = {
           <ol><li>chatgpt.com/plugins &rarr; <b>+</b> &rarr; <i>Add custom MCP server</i></li>
           <li>Connection: <b>Tunnel</b> &rarr; alege tunelul (sau lipește tunnel id)</li>
           <li>Authentication: <b>No authentication</b> (autentificarea o face tunnel-client către serverul local)</li>
-          <li>Confirmă avertismentul și <i>Create</i>; ChatGPT va descoperi uneltele <code>list_hosts</code>, <code>run_command</code>, <code>read_file</code>, <code>get_host_info</code>.</li></ol>
+          <li>Confirmă avertismentul și <i>Create</i>; ChatGPT va descoperi uneltele <code>list_hosts</code>, <code>run_command</code>, <code>read_file</code>, <code>get_host_info</code>, <code>list_clusters</code>, <code>kubectl</code>.</li></ol>
           <p class="mut" style="font-size:12px">Notă: ChatGPT nu acceptă chei API/Bearer personalizate, de aceea tokenul e injectat local. Revocarea tokenului <code>chatgpt-tunnel</code> din tab-ul Tokenuri taie accesul instant. Modurile de siguranță per host (approval/read-only) se aplică și aici.</p></div>`;
       const run = (id, fn) => (document.getElementById(id).onclick = act(async () => { await fn(); await draw(); }));
       run("tn-install", async () => { const b = document.getElementById("tn-install"); b.textContent = "se descarcă..."; b.disabled = true; await api("POST", "/api/tunnel/install", {}); });
