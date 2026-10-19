@@ -1,5 +1,5 @@
 import express from "express";
-import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
+import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
@@ -107,7 +107,18 @@ export function startAdmin(ctx: Ctx, port: number, webDir: string, tunnel: Tunne
   app.post("/api/lock", auth, wrap(() => vault.lock()));
 
   // ---- hosts ----
-  const publicHost = (h: Host) => ({ ...h, password: undefined, hasPassword: !!h.password, fingerprint: vault.d.knownHosts[h.id] });
+  const publicHost = (h: Host) => {
+    const k = vault.d.keys.find((x) => x.id === h.keyId);
+    return {
+      ...h,
+      password: undefined,
+      hasPassword: !!h.password,
+      fingerprint: vault.d.knownHosts[h.id],
+      keyName: k?.name,
+      keyValid: k ? hasPrivatePart(k) : undefined,
+      keyFingerprint: k?.publicKey ? "SHA256:" + createHash("sha256").update(Buffer.from(k.publicKey.split(" ")[1] ?? "", "base64")).digest("base64").replace(/=+$/, "") : undefined,
+    };
+  };
   const readHost = (b: any, old?: Host): Host => {
     if (!b.name || !b.hostname || !b.user) throw new Error("name, hostname and user are required");
     if (!MODES.includes(b.mode)) throw new Error("invalid mode");

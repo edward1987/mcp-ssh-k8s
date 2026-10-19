@@ -73,6 +73,7 @@ const views = {
         <div><b>${esc(h.name)}</b> <span class="mut">${esc(h.user)}@${esc(h.hostname)}:${h.port}</span>
         <span class="tag">${esc(h.mode)}</span> <span class="tag">${h.auth === "key" ? "cheie" : "parolă"}</span>
         ${h.group ? `<span class="tag">${esc(h.group)}</span>` : ""}
+        ${h.auth === "key" ? `<div style="font-size:12px">cheie: <b>${esc(h.keyName || "?")}</b> ${h.keyValid ? '<span class="ok">valid</span>' : '<b class="bad">INVALID (nu conține cheia privată)</b>'} <span class="mut">${esc(h.keyFingerprint || "")}</span></div>` : ""}
         <div class="mut" style="font-size:12px">${h.fingerprint ? "host key: " + esc(h.fingerprint) : "host key nefixat (se fixează la prima conectare)"}</div></div>
         <div class="row"><button class="b" data-test="${h.id}">Test</button><button class="b" data-edit="${h.id}">Editează</button><button class="b d" data-del="${h.id}">Șterge</button></div></div>
         <pre class="hidden" id="out-${h.id}"></pre></div>`).join("")}`;
