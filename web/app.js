@@ -27,8 +27,8 @@ async function render() {
   if (!st.unlocked) return renderLogin(st.exists);
   $app.innerHTML = `
     <header><h1>MCP SSH</h1>
-      <nav>${["hosts", "keys", "import", "tokens", "approvals", "audit", "settings"]
-        .map((t) => `<button data-t="${t}" class="${t === tab ? "on" : ""}">${{ hosts: "Hosturi", keys: "Chei", import: "Import", tokens: "Tokenuri MCP", approvals: "Aprobări", audit: "Audit", settings: "Setări" }[t]}<span id="badge-${t}"></span></button>`).join("")}
+      <nav>${["hosts", "keys", "import", "chatgpt", "tokens", "approvals", "audit", "settings"]
+        .map((t) => `<button data-t="${t}" class="${t === tab ? "on" : ""}">${{ hosts: "Hosturi", keys: "Chei", import: "Import", chatgpt: "ChatGPT", tokens: "Tokenuri MCP", approvals: "Aprobări", audit: "Audit", settings: "Setări" }[t]}<span id="badge-${t}"></span></button>`).join("")}
       </nav><button class="b" id="lock">Blochează vault</button></header>
     <main id="view"></main>`;
   $app.querySelectorAll("nav button").forEach((b) => (b.onclick = () => { tab = b.dataset.t; render(); }));
@@ -161,6 +161,42 @@ const views = {
     };
     document.getElementById("i-scan").onclick = act(async () => preview(await api("POST", "/api/import/sshconfig", { path: val("i-path") || undefined })));
     document.getElementById("i-file").onchange = act(async (e) => preview(await api("POST", "/api/import/termius", { text: await e.target.files[0].text() })));
+  },
+
+  async chatgpt() {
+    const v = document.getElementById("view");
+    const draw = async () => {
+      const s = await api("GET", "/api/tunnel");
+      const state = s.running ? (s.ready ? '<span class="ok">conectat</span>' : '<span class="bad">pornit, nepregătit</span>') : "oprit";
+      v.innerHTML = `<h2>ChatGPT (OpenAI Secure MCP Tunnel)</h2>
+        <p class="mut">Folosește tunelul oficial OpenAI: nimic nu e expus pe internet. ChatGPT vorbește cu OpenAI, iar <code>tunnel-client</code> (rulat de acest server) face apelurile spre portul MCP local, adăugând singur tokenul. Tokenul nu pleacă de pe acest PC.</p>
+        <div class="card"><b>1. Client tunel:</b> ${s.installed ? `instalat (${esc(s.version)})` : "neinstalat"}
+          <button class="b" id="tn-install" ${s.installing ? "disabled" : ""}>${s.installed ? "Actualizează" : "Descarcă și instalează"}</button>
+          <div class="mut" style="font-size:12px">Descarcă release-ul oficial openai/tunnel-client de pe GitHub și verifică SHA-256.</div></div>
+        <div class="card"><b>2. Date din platform.openai.com</b>
+          <p class="mut" style="font-size:12px">Platform &gt; Tunnels: creează tunelul (Tunnels Read+Manage), asociază-l cu workspace-ul ChatGPT și copiază <i>tunnel id</i>. Creează o cheie API runtime cu permisiuni Tunnels Read+Use. Se stochează criptat în vault.</p>
+          <div class="grid"><div><label>Tunnel ID</label><input id="tn-id" placeholder="tunnel_0123..." value="${esc(s.tunnelId)}"></div>
+          <div><label>Cheie API runtime ${s.hasApiKey ? "(salvată; gol = neschimbată)" : ""}</label><input id="tn-key" type="password" autocomplete="new-password"></div></div>
+          <label><input type="checkbox" id="tn-auto" style="width:auto" ${s.autoStart ? "checked" : ""}> Pornește automat tunelul după deblocarea vault-ului</label>
+          <p><button class="b p" id="tn-save">Salvează</button></p></div>
+        <div class="card"><b>3. Stare:</b> ${state} ${s.lastError ? `<span class="bad">${esc(s.lastError)}</span>` : ""}
+          <p><button class="b p" id="tn-start" ${s.running ? "disabled" : ""}>Pornește</button> <button class="b" id="tn-stop" ${s.running ? "" : "disabled"}>Oprește</button>
+          <button class="b" id="tn-refresh">Reîncarcă</button></p>
+          <pre style="max-height:220px">${esc(s.logs.join("\n")) || "(fără loguri)"}</pre></div>
+        <div class="card"><b>4. În ChatGPT</b>
+          <ol><li>chatgpt.com/plugins &rarr; <b>+</b> &rarr; <i>Add custom MCP server</i></li>
+          <li>Connection: <b>Tunnel</b> &rarr; alege tunelul (sau lipește tunnel id)</li>
+          <li>Authentication: <b>No authentication</b> (autentificarea o face tunnel-client către serverul local)</li>
+          <li>Confirmă avertismentul și <i>Create</i>; ChatGPT va descoperi uneltele <code>list_hosts</code>, <code>run_command</code>, <code>read_file</code>, <code>get_host_info</code>.</li></ol>
+          <p class="mut" style="font-size:12px">Notă: ChatGPT nu acceptă chei API/Bearer personalizate, de aceea tokenul e injectat local. Revocarea tokenului <code>chatgpt-tunnel</code> din tab-ul Tokenuri taie accesul instant. Modurile de siguranță per host (approval/read-only) se aplică și aici.</p></div>`;
+      const run = (id, fn) => (document.getElementById(id).onclick = act(async () => { await fn(); await draw(); }));
+      run("tn-install", async () => { const b = document.getElementById("tn-install"); b.textContent = "se descarcă..."; b.disabled = true; await api("POST", "/api/tunnel/install", {}); });
+      run("tn-save", () => api("PUT", "/api/tunnel", { tunnelId: val("tn-id"), apiKey: val("tn-key") || undefined, autoStart: document.getElementById("tn-auto").checked }));
+      run("tn-start", () => api("POST", "/api/tunnel/start", {}));
+      run("tn-stop", () => api("POST", "/api/tunnel/stop", {}));
+      run("tn-refresh", async () => {});
+    };
+    await draw();
   },
 
   async tokens() {

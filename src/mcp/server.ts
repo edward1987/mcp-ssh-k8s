@@ -108,6 +108,9 @@ export function startMcp(ctx: Ctx, port: number, bind = "127.0.0.1") {
     await transport.handleRequest(req, res, req.body);
   });
 
+  // Discovery probes (e.g. OAuth protected-resource metadata) get a JSON 404 instead of an HTML page.
+  app.use("/.well-known", (_req, res) => res.status(404).json({ error: "not_found" }));
+
   const notAllowed = (_: express.Request, res: express.Response) =>
     res.status(405).json({ jsonrpc: "2.0", error: { code: -32000, message: "Method not allowed" }, id: null });
   app.get("/mcp", notAllowed);

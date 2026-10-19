@@ -41,6 +41,8 @@ export interface VaultData {
   tokens: Token[];
   knownHosts: Record<string, string>; // host id -> fingerprint
   settings: { autoLockMinutes: number; maxOutputBytes: number; approvalTimeoutSec: number };
+  /** OpenAI Secure MCP Tunnel (ChatGPT). `token` is the raw bearer tunnel-client adds to calls to our MCP port. */
+  tunnel?: { tunnelId: string; apiKey: string; token: string; tokenId: string; autoStart: boolean };
 }
 
 const empty = (): VaultData => ({

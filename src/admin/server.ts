@@ -10,11 +10,12 @@ import { parseSshConfig, type ImportedHost } from "../import/sshconfig.js";
 import { parseTermiusCsv } from "../import/termius.js";
 import { findHost, formatResult, type Ctx } from "../service.js";
 import { runSsh } from "../ssh/exec.js";
+import type { TunnelManager } from "../tunnel/manager.js";
 import { sha256, type Host, type Mode } from "../vault/store.js";
 
 const MODES: Mode[] = ["read-only", "approval", "free"];
 
-export function startAdmin(ctx: Ctx, port: number, webDir: string) {
+export function startAdmin(ctx: Ctx, port: number, webDir: string, tunnel: TunnelManager) {
   const { vault, audit, approvals } = ctx;
   const app = express();
   app.disable("x-powered-by");
@@ -24,6 +25,7 @@ export function startAdmin(ctx: Ctx, port: number, webDir: string) {
   vault.onLock = () => {
     sessions.clear();
     approvals.denyAll();
+    tunnel.stop();
   };
   const allowedHosts = new Set([`127.0.0.1:${port}`, `localhost:${port}`]);
   let loginFails = 0;
@@ -96,6 +98,7 @@ export function startAdmin(ctx: Ctx, port: number, webDir: string) {
         throw e;
       }
       loginFails = 0;
+      tunnel.autoStart();
       return { csrf: startSession(res) };
     }),
   );
@@ -239,6 +242,12 @@ export function startAdmin(ctx: Ctx, port: number, webDir: string) {
     }),
   );
 
+  // ---- ChatGPT tunnel (OpenAI Secure MCP Tunnel) ----
+  app.get("/api/tunnel", auth, wrap(() => tunnel.status()));
+  app.put("/api/tunnel", auth, wrap((req) => tunnel.configure(req.body)));
+  app.post("/api/tunnel/install", auth, wrap(() => tunnel.install()));
+  app.post("/api/tunnel/start", auth, wrap(() => tunnel.start()));
+  app.post("/api/tunnel/stop", auth, wrap(() => tunnel.stop()));
   // ---- approvals / audit / settings ----
   app.get("/api/approvals", auth, wrap(() => approvals.list()));
   app.post(
