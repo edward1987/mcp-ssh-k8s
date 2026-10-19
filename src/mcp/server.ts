@@ -85,11 +85,15 @@ export function startMcp(ctx: Ctx, port: number, bind = "127.0.0.1") {
     const f = failures.get(ip);
     if (f && f.n >= 10 && Date.now() < f.until) return void res.status(429).json({ error: "too many failures" });
     const m = /^Bearer (.+)$/.exec(req.headers.authorization ?? "");
-    if (!ctx.vault.unlocked) return void res.status(503).json({ error: "vault locked - unlock it in the web UI" });
+    const deny = (code: number, why: string) => {
+      ctx.audit.log({ client: ip, host: "-", action: `mcp-auth ${req.method}`, outcome: `${code} ${why}` });
+    };
+    if (!ctx.vault.unlocked) return void (deny(503, "vault locked"), res.status(503).json({ error: "vault locked - unlock it in the web UI" }));
     const tok = m ? ctx.vault.verifyToken(m[1]) : null;
     if (!tok) {
       const cur = f ?? { n: 0, until: 0 };
       failures.set(ip, { n: cur.n + 1, until: Date.now() + 60_000 });
+      deny(401, m ? "invalid token" : "missing bearer token");
       return void res.status(401).json({ error: "unauthorized" });
     }
     failures.delete(ip);
