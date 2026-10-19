@@ -120,7 +120,7 @@ const views = {
   async keys() {
     const keys = await api("GET", "/api/keys");
     document.getElementById("view").innerHTML = `<h2>Chei SSH</h2>
-      ${keys.map((k) => `<div class="card"><div class="row" style="justify-content:space-between"><div><b>${esc(k.name)}</b> ${k.hasPassphrase ? '<span class="tag">passphrase</span>' : ""}
+      ${keys.map((k) => `<div class="card"><div class="row" style="justify-content:space-between"><div><b>${esc(k.name)}</b> ${k.hasPassphrase ? '<span class="tag">passphrase</span>' : ""} ${k.valid ? "" : '<b class="bad">INVALID: conține doar cheia publică sau cheie ilizibilă. Șterge-o și adaug-o pe cea privată.</b>'}
         <pre>${esc(k.publicKey)}</pre></div><button class="b d" data-del="${k.id}">Șterge</button></div></div>`).join("") || '<p class="mut">Nicio cheie.</p>'}
       <div class="card"><h3>Adaugă cheie privată</h3>
         <label>Nume</label><input id="k-name"><label>Cheie privată (OpenSSH / PEM)</label><textarea id="k-priv"></textarea>

@@ -173,11 +173,18 @@ export function startAdmin(ctx: Ctx, port: number, webDir: string, tunnel: Tunne
   );
 
   // ---- keys ----
-  const publicKey = (k: { id: string; name: string; publicKey?: string; passphrase?: string }) => ({
+  /** Does the stored value actually contain a usable private key (older versions accepted public keys)? */
+  const hasPrivatePart = (k: { privateKey: string; passphrase?: string }) => {
+    const p = utils.parseKey(k.privateKey, k.passphrase || undefined);
+    const one = Array.isArray(p) ? p[0] : p;
+    return !(one instanceof Error) && one.getPrivatePEM() !== null;
+  };
+  const publicKey = (k: { id: string; name: string; publicKey?: string; passphrase?: string; privateKey: string }) => ({
     id: k.id,
     name: k.name,
     publicKey: k.publicKey,
     hasPassphrase: !!k.passphrase,
+    valid: hasPrivatePart(k),
   });
   app.get("/api/keys", auth, wrap(() => vault.d.keys.map(publicKey)));
   const addKey = (name: string, privateKey: string, passphrase?: string) => {
