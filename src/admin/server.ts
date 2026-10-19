@@ -11,6 +11,7 @@ import { parseTermiusCsv } from "../import/termius.js";
 import { findHost, formatResult, type Ctx } from "../service.js";
 import { runSsh } from "../ssh/exec.js";
 import type { TunnelManager } from "../tunnel/manager.js";
+import { normalizeKey } from "../vault/keys.js";
 import { sha256, type Host, type Mode } from "../vault/store.js";
 
 const MODES: Mode[] = ["read-only", "approval", "free"];
@@ -179,10 +180,7 @@ export function startAdmin(ctx: Ctx, port: number, webDir: string, tunnel: Tunne
   });
   app.get("/api/keys", auth, wrap(() => vault.d.keys.map(publicKey)));
   const addKey = (name: string, privateKey: string, passphrase?: string) => {
-    privateKey = privateKey.replace(/
-/g, "
-").trim() + "
-";
+    privateKey = normalizeKey(privateKey);
     const parsed = utils.parseKey(privateKey, passphrase || undefined);
     if (parsed instanceof Error) throw new Error("invalid key: " + parsed.message);
     const p = Array.isArray(parsed) ? parsed[0] : parsed;
