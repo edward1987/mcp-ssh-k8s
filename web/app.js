@@ -43,20 +43,22 @@ async function render() {
 }
 
 function renderLogin(exists) {
-  $app.innerHTML = `<div id="login" class="card"><h2>${exists ? "Deblochează vault-ul" : "Creează vault-ul"}</h2>
+  const ac = exists ? "current-password" : "new-password";
+  $app.innerHTML = `<form id="login" class="card" autocomplete="on"><h2>${exists ? "Deblochează vault-ul" : "Creează vault-ul"}</h2>
     <p class="mut">${exists ? "Introdu parola master." : "Alege o parolă master (min. 12 caractere). Nu poate fi recuperată - fără ea datele sunt pierdute."}</p>
-    <label>Parolă master</label><input type="password" id="pw" autofocus>
-    ${exists ? "" : `<label>Repetă parola</label><input type="password" id="pw2">`}
-    <p><button class="b p" id="go">${exists ? "Deblochează" : "Creează"}</button> <span id="err" class="bad"></span></p></div>`;
-  const go = async () => {
+    <input type="text" name="username" value="mcp-ssh-vault" autocomplete="username" hidden>
+    <label for="pw">Parolă master</label><input type="password" id="pw" name="password" autocomplete="${ac}">
+    ${exists ? "" : `<label for="pw2">Repetă parola</label><input type="password" id="pw2" name="password2" autocomplete="new-password">`}
+    <p><button type="submit" class="b p" id="go">${exists ? "Deblochează" : "Creează"}</button> <span id="err" class="bad"></span></p></form>`;
+  document.getElementById("login").onsubmit = async (e) => {
+    e.preventDefault();
     try {
       if (!exists && val("pw") !== val("pw2")) throw new Error("parolele nu coincid");
       const r = await api("POST", exists ? "/api/unlock" : "/api/setup", { password: val("pw") });
       csrf = r.csrf; render();
-    } catch (e) { document.getElementById("err").textContent = e.message; }
+    } catch (err) { document.getElementById("err").textContent = err.message; }
   };
-  document.getElementById("go").onclick = go;
-  document.getElementById("pw").onkeydown = (e) => e.key === "Enter" && go();
+  setTimeout(() => document.getElementById("pw").focus(), 50);
 }
 
 // ---- views ----
