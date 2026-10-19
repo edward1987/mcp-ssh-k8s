@@ -104,6 +104,19 @@ export class Vault {
     this.touch();
   }
 
+  /** Check a password against the file without touching the in-memory state. */
+  async verifyPassword(password: string) {
+    const f = JSON.parse(readFileSync(this.path, "utf8")) as VaultFile;
+    const key = await deriveKey(password, Buffer.from(f.kdf.salt, "base64"), f.kdf);
+    try {
+      decrypt(key, f);
+    } catch {
+      throw new Error("wrong password");
+    } finally {
+      key.fill(0);
+    }
+  }
+
   lock() {
     this.key?.fill(0);
     this.key = null;

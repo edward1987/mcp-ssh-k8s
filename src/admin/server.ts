@@ -89,8 +89,9 @@ export function startAdmin(ctx: Ctx, port: number, webDir: string, tunnel: Tunne
     wrap(async (req, res) => {
       if (Date.now() < lockedUntil) throw new Error("too many attempts, wait a bit");
       try {
-        if (vault.unlocked) throw new Error("vault is already unlocked in another session: lock it first");
-        await vault.unlock(String(req.body.password ?? ""));
+        // Already unlocked (e.g. the browser session expired): re-verify the password and open a new session.
+        if (vault.unlocked) await vault.verifyPassword(String(req.body.password ?? ""));
+        else await vault.unlock(String(req.body.password ?? ""));
       } catch (e) {
         if (++loginFails >= 5) {
           lockedUntil = Date.now() + 30_000;

@@ -1,0 +1,30 @@
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { expect, it } from "vitest";
+import { Vault } from "../src/vault/store.js";
+
+it("survives unlock -> save -> unlock and password change cycles", async () => {
+  const p = join(mkdtempSync(join(tmpdir(), "cyc-")), "vault.json");
+  const a = new Vault(p);
+  await a.create("first password 123");
+  a.d.keys.push({ id: "k", name: "k", privateKey: "x" });
+  a.save();
+  a.lock();
+  const b = new Vault(p);
+  await b.unlock("first password 123");
+  b.d.settings.autoLockMinutes = 5;
+  b.save();
+  b.lock();
+  const c = new Vault(p);
+  await c.unlock("first password 123");
+  await c.changePassword("first password 123", "second password 456");
+  c.d.hosts.push({ id: "h", name: "h", hostname: "x", port: 22, user: "u", auth: "password", mode: "free", allowlist: [] });
+  c.save();
+  c.lock();
+  const d = new Vault(p);
+  await expect(d.unlock("first password 123")).rejects.toThrow();
+  await d.unlock("second password 456");
+  expect(d.d.hosts).toHaveLength(1);
+  expect(d.d.keys).toHaveLength(1);
+}, 60000);
