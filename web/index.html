@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="ro">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MCP SSH</title>
+<style>
+  :root { --bg:#fff; --fg:#1b1f24; --mut:#667; --line:#dde1e6; --card:#f6f8fa; --acc:#2563eb; --bad:#c62828; --ok:#1b7f3b; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#14171c; --fg:#e6e9ee; --mut:#98a2b3; --line:#2b313a; --card:#1c2128; --acc:#6ea0ff; --bad:#ff7b72; --ok:#56d364; } }
+  * { box-sizing:border-box }
+  body { margin:0; font:14px/1.45 system-ui,sans-serif; background:var(--bg); color:var(--fg) }
+  header { display:flex; gap:8px; align-items:center; padding:10px 16px; border-bottom:1px solid var(--line); flex-wrap:wrap }
+  header h1 { font-size:16px; margin:0 12px 0 0 }
+  nav { display:flex; gap:4px; flex-wrap:wrap; flex:1 }
+  nav button { background:none; border:0; padding:6px 10px; border-radius:6px; color:var(--fg); cursor:pointer }
+  nav button.on { background:var(--card); font-weight:600; outline:1px solid var(--line) }
+  main { max-width:960px; margin:0 auto; padding:16px }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:12px; margin-bottom:10px }
+  .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center }
+  label { display:block; font-size:12px; color:var(--mut); margin:8px 0 2px }
+  input, select, textarea { width:100%; padding:7px 8px; border:1px solid var(--line); border-radius:6px; background:var(--bg); color:var(--fg); font:inherit }
+  textarea { font-family:ui-monospace,monospace; min-height:90px }
+  button.b { padding:7px 12px; border-radius:6px; border:1px solid var(--line); background:var(--bg); color:var(--fg); cursor:pointer }
+  button.p { background:var(--acc); color:#fff; border-color:var(--acc) }
+  button.d { color:var(--bad) }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:0 12px }
+  .mut { color:var(--mut) } .bad { color:var(--bad) } .ok { color:var(--ok) }
+  pre { background:var(--bg); border:1px solid var(--line); padding:8px; border-radius:6px; overflow:auto; white-space:pre-wrap; word-break:break-all }
+  table { width:100%; border-collapse:collapse } td,th { text-align:left; padding:4px 6px; border-bottom:1px solid var(--line); vertical-align:top }
+  .tag { font-size:11px; padding:1px 6px; border-radius:10px; border:1px solid var(--line) }
+  #login { max-width:380px; margin:12vh auto }
+  .hidden { display:none }
+</style>
+</head>
+<body>
+<div id="app"></div>
+<script src="app.js"></script>
+</body>
+</html>
