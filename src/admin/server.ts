@@ -179,9 +179,15 @@ export function startAdmin(ctx: Ctx, port: number, webDir: string, tunnel: Tunne
   });
   app.get("/api/keys", auth, wrap(() => vault.d.keys.map(publicKey)));
   const addKey = (name: string, privateKey: string, passphrase?: string) => {
+    privateKey = privateKey.replace(/
+/g, "
+").trim() + "
+";
     const parsed = utils.parseKey(privateKey, passphrase || undefined);
     if (parsed instanceof Error) throw new Error("invalid key: " + parsed.message);
     const p = Array.isArray(parsed) ? parsed[0] : parsed;
+    if (p.getPrivatePEM() === null)
+      throw new Error("this is a PUBLIC key (or has no private part). Paste the private key: the file without .pub, starting with -----BEGIN ... PRIVATE KEY-----");
     const k = {
       id: randomUUID(),
       name,
