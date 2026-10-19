@@ -9,6 +9,8 @@
 
 Instead of granting AI models direct shell access or exposing raw SSH private keys and kubeconfigs, **mcp-ssh** acts as an intelligent intermediary. It stores all credentials in an AES-256-GCM encrypted local vault, enforces granular policy controls (`read-only`, `approval`, `free`), maintains an immutable audit trail, and gives human operators full visibility and control over every command executed.
 
+> 📖 **[Ghid complet de utilizare pas cu pas în limba română găsiți aici (docs/GHID_UTILIZARE.md)](docs/GHID_UTILIZARE.md)**
+
 ---
 
 ## Architecture Overview
