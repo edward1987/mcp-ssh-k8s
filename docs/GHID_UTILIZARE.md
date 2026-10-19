@@ -1,6 +1,6 @@
-# Ghid Complet de Utilizare — mcp-ssh
+# Ghid Complet de Utilizare — mcp-ssh-k8s
 
-Acest ghid detaliază fiecare funcționalitate, ecran, flux de lucru și opțiune de configurare din aplicația **mcp-ssh**.
+Acest ghid detaliază fiecare funcționalitate, ecran, flux de lucru și opțiune de configurare din aplicația **mcp-ssh-k8s**.
 
 ---
 

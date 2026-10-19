@@ -1,11 +1,11 @@
-# mcp-ssh
+# mcp-ssh-k8s
 
 [![Model Context Protocol](https://img.shields.io/badge/MCP-Compatible-blue.svg)](https://modelcontextprotocol.io/)
 [![Security](https://img.shields.io/badge/Security-Zero--Trust%20Vault-green.svg)](#security-model)
 [![Node.js](https://img.shields.io/badge/Node.js-%3E%3D20-brightgreen.svg)](https://nodejs.org/)
 [![License](https://img.shields.io/badge/License-MIT-purple.svg)](#license)
 
-**mcp-ssh** is a self-hosted, Zero-Trust gateway that connects AI agents (**Claude Code**, **Claude Desktop**, **ChatGPT**, **Cursor**, etc.) to your SSH servers and Kubernetes clusters via the [Model Context Protocol](https://modelcontextprotocol.io/).
+**mcp-ssh-k8s** is a self-hosted, Zero-Trust gateway that connects AI agents (**Claude Code**, **Claude Desktop**, **ChatGPT**, **Cursor**, etc.) to your SSH servers and Kubernetes clusters via the [Model Context Protocol](https://modelcontextprotocol.io/).
 
 Instead of granting AI models direct shell access or exposing raw SSH private keys and kubeconfigs, **mcp-ssh** acts as an intelligent intermediary. It stores all credentials in an AES-256-GCM encrypted local vault, enforces granular policy controls (`read-only`, `approval`, `free`), maintains an immutable audit trail, and gives human operators full visibility and control over every command executed.
 
@@ -133,8 +133,8 @@ Connecting ChatGPT Web to a local MCP server presents a unique architectural pro
 ### 1. Clone & Install
 
 ```bash
-git clone https://github.com/<your-username>/mcp-ssh.git
-cd mcp-ssh
+git clone https://github.com/edward1987/mcp-ssh-k8s.git
+cd mcp-ssh-k8s
 npm install
 ```
 
