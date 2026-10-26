@@ -2,6 +2,7 @@ import express from "express";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { z } from "zod";
+import { runHostSecurityAudit } from "../security.js";
 import { findHost, formatResult, runCommand, runKube, shq, type Ctx } from "../service.js";
 
 function buildServer(ctx: Ctx, client: string) {
@@ -68,6 +69,65 @@ function buildServer(ctx: Ctx, client: string) {
         return out.join("\n\n");
       });
     },
+  );
+
+  server.registerTool(
+    "get_security_checklist",
+    {
+      description:
+        "Get the security checklist: returns the list of target servers selected by the operator for security audit, their safety mode, online status, notes, and previous check history, plus security audit guidelines (auth logs, failed logins, listening ports, failed services, disk). Call this when asked to do a security check or audit checklist servers.",
+    },
+    async () =>
+      guard(async () => {
+        const items = ctx.vault.d.checklist || [];
+        const enriched = items
+          .map((item) => {
+            const h = ctx.vault.d.hosts.find((x) => x.id === item.hostId);
+            if (!h) return null;
+            const online = ctx.monitor ? ctx.monitor.isOnline(h) : true;
+            return {
+              name: h.name,
+              address: `${h.hostname}:${h.port}`,
+              user: h.user,
+              mode: h.mode,
+              group: h.group,
+              online,
+              notes: item.notes,
+              lastChecked: item.lastChecked,
+              lastStatus: item.lastStatus,
+              lastSummary: item.lastSummary,
+            };
+          })
+          .filter(Boolean);
+
+        return JSON.stringify(
+          {
+            checklist_servers: enriched,
+            total_count: enriched.length,
+            guidelines:
+              "When instructed to perform a security check: For each server in checklist_servers (or each online server), inspect: 1) System uptime & OS version; 2) Active login sessions and recent logins; 3) Authentication logs (failed SSH logins, invalid users); 4) Open listening network ports; 5) Failed systemd services; 6) Disk space and memory. You can use 'run_security_check' to perform this audit automatically per host, or use 'run_command' / 'read_file' to drill down deeper into specific logs.",
+          },
+          null,
+          2,
+        );
+      }),
+  );
+
+  server.registerTool(
+    "run_security_check",
+    {
+      description:
+        "Run an automated read-only security check on a host (inspecting auth logs, failed SSH logins, listening ports, failed services, uptime, and disk usage). Returns a structured security audit report and updates the checklist status.",
+      inputSchema: {
+        host: z.string().describe("Host name from get_security_checklist or list_hosts"),
+        focus: z.enum(["all", "auth", "ports", "services", "system"]).default("all").optional().describe("Optional area of focus"),
+      },
+    },
+    async ({ host, focus }) =>
+      guard(async () => {
+        const res = await runHostSecurityAudit(ctx, client, host, focus ?? "all");
+        return res.report;
+      }),
   );
 
   server.registerTool(

@@ -21,6 +21,24 @@ const val = (id) => document.getElementById(id).value;
 const el = (html) => { const t = document.createElement("template"); t.innerHTML = html.trim(); return t.content.firstChild; };
 
 // ---- shell ----
+async function updateBadges() {
+  const [a, cl] = await Promise.all([
+    api("GET", "/api/approvals").catch(() => []),
+    api("GET", "/api/checklist").catch(() => []),
+  ]);
+  const bAp = document.getElementById("badge-approvals");
+  if (bAp) bAp.textContent = a.length ? ` (${a.length})` : "";
+  const bCl = document.getElementById("badge-checklist");
+  if (bCl) bCl.textContent = cl.length ? ` (${cl.length})` : "";
+  return { approvals: a, checklist: cl };
+}
+
+async function switchTab(newTab) {
+  tab = newTab;
+  document.querySelectorAll("nav button").forEach((b) => b.classList.toggle("on", b.dataset.t === tab));
+  await views[tab]();
+}
+
 async function render() {
   clearInterval(poll);
   const seq = ++renderSeq;
@@ -28,22 +46,28 @@ async function render() {
   if (seq !== renderSeq) return; // a newer render took over
   if (st.unlocked) csrf = st.csrf;
   if (!st.unlocked) return renderLogin(st.exists);
-  $app.innerHTML = `
-    <header><h1>MCP SSH</h1>
-      <nav>${["hosts", "k8s", "keys", "import", "chatgpt", "tokens", "approvals", "audit", "settings"]
-        .map((t) => `<button data-t="${t}" class="${t === tab ? "on" : ""}">${{ hosts: "Hosturi", k8s: "Kubernetes", keys: "Chei", import: "Import", chatgpt: "ChatGPT", tokens: "Tokenuri MCP", approvals: "Aprobări", audit: "Audit", settings: "Setări" }[t]}<span id="badge-${t}"></span></button>`).join("")}
-      </nav><button class="b" id="lock">Blochează vault</button></header>
-    <main id="view"></main>`;
-  $app.querySelectorAll("nav button").forEach((b) => (b.onclick = () => { tab = b.dataset.t; render(); }));
-  document.getElementById("lock").onclick = act(async () => { await api("POST", "/api/lock", {}); csrf = null; render(); });
+  if (!document.getElementById("view")) {
+    $app.innerHTML = `
+      <header><h1>MCP SSH</h1>
+        <nav>${["hosts", "checklist", "k8s", "keys", "import", "chatgpt", "tokens", "approvals", "audit", "settings"]
+          .map((t) => `<button data-t="${t}" class="${t === tab ? "on" : ""}">${{ hosts: "Hosturi", checklist: "Checklist", k8s: "Kubernetes", keys: "Chei", import: "Import", chatgpt: "ChatGPT", tokens: "Tokenuri MCP", approvals: "Aprobări", audit: "Audit", settings: "Setări" }[t]}<span id="badge-${t}"></span></button>`).join("")}
+        </nav><button class="b" id="lock">Blochează vault</button></header>
+      <main id="view"></main>`;
+    $app.querySelectorAll("nav button").forEach((b) => (b.onclick = () => switchTab(b.dataset.t)));
+    document.getElementById("lock").onclick = act(async () => { await api("POST", "/api/lock", {}); csrf = null; render(); });
+  } else {
+    document.querySelectorAll("nav button").forEach((b) => b.classList.toggle("on", b.dataset.t === tab));
+  }
+  void updateBadges();
   await views[tab]();
   if (seq !== renderSeq) return;
   clearInterval(poll);
   poll = setInterval(act(async () => {
-    const a = await api("GET", "/api/approvals");
-    const b = document.getElementById("badge-approvals");
-    if (b) b.textContent = a.length ? ` (${a.length})` : "";
-    if (tab === "approvals" && JSON.stringify(a.map((x) => x.id)) !== window.__ap) { window.__ap = JSON.stringify(a.map((x) => x.id)); views.approvals(); }
+    const { approvals: a } = await updateBadges();
+    if (tab === "approvals" && JSON.stringify(a.map((x) => x.id)) !== window.__ap) {
+      window.__ap = JSON.stringify(a.map((x) => x.id));
+      views.approvals();
+    }
   }), 2000);
 }
 
@@ -71,25 +95,28 @@ function renderLogin(exists) {
 const views = {
   async hosts() {
     const dot = (h) => `<span data-dot="${h.id}">${h.online === undefined ? "" : h.online ? '<span class="ok" title="accesibil">●</span>' : `<b class="bad" title="${esc(h.offlineReason || "")}">●</b>`}</span>`;
-    const [hosts, keys] = await Promise.all([api("GET", "/api/hosts"), api("GET", "/api/keys")]);
+    const [hosts, keys, checklist] = await Promise.all([api("GET", "/api/hosts"), api("GET", "/api/keys"), api("GET", "/api/checklist")]);
+    const checkHostIds = new Set(checklist.map((c) => c.hostId));
     const v = document.getElementById("view");
     v.innerHTML = `<div class="row" style="justify-content:space-between"><h2>Hosturi</h2><div class="row"><button class="b" id="recheck">Verifică disponibilitatea</button><button class="b p" id="new">+ Host nou</button></div></div>
-      <div id="form"></div>
+      <dialog id="host-dialog"></dialog>
       ${hosts.length ? `<div class="card row" id="bulk" style="gap:10px;flex-wrap:wrap">
         <label style="margin:0"><input type="checkbox" id="sel-all" style="width:auto"> toate</label>
         <select id="sel-group" style="width:auto"><option value="">selectează grup…</option>${[...new Set(hosts.map((h) => h.group).filter(Boolean))].map((g) => `<option>${esc(g)}</option>`).join("")}</select>
         <span class="mut" id="sel-n"></span>
         <span style="flex:1"></span>
+        <button class="b" id="bulk-checklist">+ Adaugă în Checklist</button>
         <label style="margin:0">Mod: <select id="bulk-mode" style="width:auto"><option value="approval">approval</option><option value="read-only">read-only</option><option value="free">free</option></select></label>
-        <button class="b p" id="bulk-go">Aplică pe selectate</button></div>` : ""}
+        <button class="b p" id="bulk-go">Aplică mod</button></div>` : ""}
       ${hosts.length ? "" : '<p class="mut">Niciun host. Adaugă unul sau folosește Import.</p>'}
-      ${hosts.map((h) => `<div class="card"><div class="row" style="justify-content:space-between">
+      ${hosts.map((h) => `<div class="card" id="host-card-${h.id}"><div class="row" style="justify-content:space-between">
         <div><input type="checkbox" class="sel" data-id="${h.id}" style="width:auto" ${selected.has(h.id) ? "checked" : ""}> ${dot(h)} <b>${esc(h.name)}</b>${h.online === false ? ' <span class="tag">offline – ascuns din MCP</span>' : ""} <span class="mut">${esc(h.user)}@${esc(h.hostname)}:${h.port}</span>
         <span class="tag">${esc(h.mode)}</span> <span class="tag">${h.auth === "key" ? "cheie" : "parolă"}</span>
         ${h.group ? `<span class="tag">${esc(h.group)}</span>` : ""}
+        <span id="cl-tag-${h.id}">${checkHostIds.has(h.id) ? '<span class="tag ok">✓ Checklist</span>' : ""}</span>
         ${h.auth === "key" ? `<div style="font-size:12px">cheie: <b>${esc(h.keyName || "?")}</b> ${h.keyValid ? '<span class="ok">valid</span>' : '<b class="bad">INVALID (nu conține cheia privată)</b>'} <span class="mut">${esc(h.keyFingerprint || "")}</span></div>` : ""}
         <div class="mut" style="font-size:12px">${h.fingerprint ? "host key: " + esc(h.fingerprint) : "host key nefixat (se fixează la prima conectare)"}</div></div>
-        <div class="row"><button class="b" data-test="${h.id}">Test</button><button class="b" data-edit="${h.id}">Editează</button><button class="b d" data-del="${h.id}">Șterge</button></div></div>
+        <div class="row"><span id="cl-btn-${h.id}">${checkHostIds.has(h.id) ? `<button class="b" data-check-del="${h.id}">Scoate din Checklist</button>` : `<button class="b" data-check-add="${h.id}">+ Checklist</button>`}</span><button class="b" data-test="${h.id}">Test</button><button class="b" data-edit="${h.id}">Editează</button><button class="b d" data-del="${h.id}">Șterge</button></div></div>
         <pre class="hidden" id="out-${h.id}"></pre></div>`).join("")}`;
     document.getElementById("recheck").onclick = act(async () => {
       await api("POST", "/api/hosts/check", {});
@@ -111,6 +138,13 @@ const views = {
         if (e.target.value) hosts.filter((h) => h.group === e.target.value).forEach((h) => selected.add(h.id));
         e.target.value = ""; syncSel();
       };
+      const bClBulk = document.getElementById("bulk-checklist");
+      if (bClBulk) bClBulk.onclick = act(async () => {
+        if (!selected.size) throw new Error("Nu e selectat niciun host");
+        await api("POST", "/api/checklist", { hostIds: [...selected] });
+        for (const id of selected) updateChecklistUI(id, true);
+        void updateBadges();
+      });
       document.getElementById("bulk-go").onclick = act(async () => {
         if (!selected.size) throw new Error("Nu e selectat niciun host");
         const mode = val("bulk-mode");
@@ -127,44 +161,338 @@ const views = {
       }
     };
     const form = (h = {}) => {
-      const f = document.getElementById("form");
-      f.innerHTML = `<div class="card"><div class="grid">
-        <div><label>Nume</label><input id="f-name" value="${esc(h.name)}"></div>
-        <div><label>Hostname / IP</label><input id="f-host" value="${esc(h.hostname)}"></div>
-        <div><label>Port</label><input id="f-port" type="number" value="${h.port || 22}"></div>
-        <div><label>Utilizator</label><input id="f-user" value="${esc(h.user)}"></div>
-        <div><label>Autentificare</label><select id="f-auth"><option value="key">Cheie SSH</option><option value="password">Parolă</option></select></div>
-        <div id="w-key"><label>Cheie</label><select id="f-key">${keys.map((k) => `<option value="${k.id}" ${k.id === h.keyId ? "selected" : ""}>${esc(k.name)}</option>`).join("")}</select></div>
-        <div id="w-pw"><label>Parolă ${h.hasPassword ? "(lasă gol = neschimbată)" : ""}</label><input id="f-pw" type="password" autocomplete="new-password"></div>
-        <div><label>Mod siguranță</label><select id="f-mode">
-          <option value="approval">approval - aprobi fiecare comandă</option>
-          <option value="read-only">read-only - doar comenzi din allowlist</option>
-          <option value="free">free - AI-ul rulează orice</option></select></div>
-        <div><label>Grup</label><input id="f-group" value="${esc(h.group)}"></div></div>
-        <label>Allowlist suplimentar read-only (un prefix de comandă pe linie, ex: <code>systemctl status</code>)</label>
-        <textarea id="f-allow">${esc((h.allowlist || []).join("\n"))}</textarea>
-        ${h.id ? `<label><input type="checkbox" id="f-reset" style="width:auto"> Resetează host key fixat (după reinstalare server)</label>` : ""}
-        <p><button class="b p" id="save">Salvează</button> <button class="b" id="cancel">Anulează</button></p></div>`;
+      const dlg = document.getElementById("host-dialog");
+      dlg.innerHTML = `
+        <div class="row" style="justify-content:space-between;margin-bottom:12px">
+          <h3 style="margin:0">${h.id ? `Editează Host: ${esc(h.name)}` : "Host nou"}</h3>
+          <button class="b" id="dlg-close" type="button" style="padding:2px 8px;font-size:16px;line-height:1">×</button>
+        </div>
+        <form id="f-host-form">
+          <div class="grid">
+            <div><label>Nume</label><input id="f-name" value="${esc(h.name)}" required></div>
+            <div><label>Hostname / IP</label><input id="f-host" value="${esc(h.hostname)}" required></div>
+            <div><label>Port</label><input id="f-port" type="number" value="${h.port || 22}"></div>
+            <div><label>Utilizator</label><input id="f-user" value="${esc(h.user)}" required></div>
+            <div><label>Autentificare</label><select id="f-auth"><option value="key">Cheie SSH</option><option value="password">Parolă</option></select></div>
+            <div id="w-key"><label>Cheie</label><select id="f-key">${keys.map((k) => `<option value="${k.id}" ${k.id === h.keyId ? "selected" : ""}>${esc(k.name)}</option>`).join("")}</select></div>
+            <div id="w-pw"><label>Parolă ${h.hasPassword ? "(lasă gol = neschimbată)" : ""}</label><input id="f-pw" type="password" autocomplete="new-password"></div>
+            <div><label>Mod siguranță</label><select id="f-mode">
+              <option value="approval">approval - aprobi fiecare comandă</option>
+              <option value="read-only">read-only - doar comenzi din allowlist</option>
+              <option value="free">free - AI-ul rulează orice</option></select></div>
+            <div><label>Grup</label><input id="f-group" value="${esc(h.group)}"></div>
+          </div>
+          <label style="margin-top:8px">Allowlist suplimentar read-only (un prefix de comandă pe linie, ex: <code>systemctl status</code>)</label>
+          <textarea id="f-allow">${esc((h.allowlist || []).join("\n"))}</textarea>
+          ${h.id ? `<label style="margin-top:6px"><input type="checkbox" id="f-reset" style="width:auto"> Resetează host key fixat (după reinstalare server)</label>` : ""}
+          <div class="row" style="justify-content:flex-end;margin-top:16px;gap:8px">
+            <button class="b" id="cancel" type="button">Anulează</button>
+            <button class="b p" id="save" type="submit">Salvează</button>
+          </div>
+        </form>`;
+
       document.getElementById("f-auth").value = h.auth || "key";
       document.getElementById("f-mode").value = h.mode || "approval";
-      const sync = () => { const k = val("f-auth") === "key"; document.getElementById("w-key").classList.toggle("hidden", !k); document.getElementById("w-pw").classList.toggle("hidden", k); };
-      document.getElementById("f-auth").onchange = sync; sync();
-      document.getElementById("cancel").onclick = () => (f.innerHTML = "");
-      document.getElementById("save").onclick = act(async () => {
-        const body = { name: val("f-name"), hostname: val("f-host"), port: val("f-port"), user: val("f-user"), auth: val("f-auth"),
-          keyId: document.getElementById("f-key")?.value, password: val("f-pw"), mode: val("f-mode"), group: val("f-group"),
-          allowlist: val("f-allow").split("\n").map((s) => s.trim()).filter(Boolean), resetFingerprint: document.getElementById("f-reset")?.checked };
+
+      const sync = () => {
+        const k = val("f-auth") === "key";
+        document.getElementById("w-key").classList.toggle("hidden", !k);
+        document.getElementById("w-pw").classList.toggle("hidden", k);
+      };
+      document.getElementById("f-auth").onchange = sync;
+      sync();
+
+      const close = () => {
+        dlg.close();
+        dlg.innerHTML = "";
+      };
+      document.getElementById("cancel").onclick = close;
+      document.getElementById("dlg-close").onclick = close;
+
+      dlg.onclick = (e) => {
+        if (e.target === dlg) close();
+      };
+
+      document.getElementById("f-host-form").onsubmit = act(async (e) => {
+        e.preventDefault();
+        const body = {
+          name: val("f-name"),
+          hostname: val("f-host"),
+          port: Number(val("f-port")) || 22,
+          user: val("f-user"),
+          auth: val("f-auth"),
+          keyId: document.getElementById("f-key")?.value || undefined,
+          password: val("f-pw") || undefined,
+          mode: val("f-mode"),
+          group: val("f-group") || undefined,
+          allowlist: val("f-allow").split("\n").map((s) => s.trim()).filter(Boolean),
+          resetFingerprint: document.getElementById("f-reset")?.checked,
+        };
         await api(h.id ? "PUT" : "POST", h.id ? "/api/hosts/" + h.id : "/api/hosts", body);
-        render();
+        close();
+        await views.hosts();
+        void updateBadges();
       });
+
+      dlg.showModal();
+      setTimeout(() => document.getElementById("f-name")?.focus(), 50);
     };
     document.getElementById("new").onclick = () => form();
-    v.querySelectorAll("[data-edit]").forEach((b) => (b.onclick = () => form(hosts.find((h) => h.id === b.dataset.edit))));
-    v.querySelectorAll("[data-del]").forEach((b) => (b.onclick = act(async () => { if (confirm("Ștergi hostul?")) { await api("DELETE", "/api/hosts/" + b.dataset.del); render(); } })));
+    const updateChecklistUI = (id, inList) => {
+      checkHostIds[inList ? "add" : "delete"](id);
+      const tag = document.getElementById(`cl-tag-${id}`);
+      if (tag) tag.innerHTML = inList ? '<span class="tag ok">✓ Checklist</span>' : "";
+      const btn = document.getElementById(`cl-btn-${id}`);
+      if (btn) {
+        btn.innerHTML = inList
+          ? `<button class="b" data-check-del="${id}">Scoate din Checklist</button>`
+          : `<button class="b" data-check-add="${id}">+ Checklist</button>`;
+        bindCheckButtons(btn);
+      }
+    };
+    const bindCheckButtons = (scope = v) => {
+      scope.querySelectorAll("[data-check-add]").forEach((b) => (b.onclick = act(async () => {
+        const id = b.dataset.checkAdd;
+        await api("POST", "/api/checklist", { hostId: id });
+        updateChecklistUI(id, true);
+        void updateBadges();
+      })));
+      scope.querySelectorAll("[data-check-del]").forEach((b) => (b.onclick = act(async () => {
+        const id = b.dataset.checkDel;
+        await api("DELETE", `/api/checklist/${id}`);
+        updateChecklistUI(id, false);
+        void updateBadges();
+      })));
+    };
+    bindCheckButtons();
+    v.querySelectorAll("[data-edit]").forEach((b) => (b.onclick = () => {
+      const target = hosts.find((h) => String(h.id) === String(b.dataset.edit));
+      if (target) form(target);
+    }));
+    v.querySelectorAll("[data-del]").forEach((b) => (b.onclick = act(async () => {
+      if (confirm("Ștergi hostul?")) {
+        await api("DELETE", "/api/hosts/" + b.dataset.del);
+        await views.hosts();
+        void updateBadges();
+      }
+    })));
     v.querySelectorAll("[data-test]").forEach((b) => (b.onclick = async () => {
       const o = document.getElementById("out-" + b.dataset.test); o.classList.remove("hidden"); o.textContent = "se conectează...";
       try { o.textContent = (await api("POST", `/api/hosts/${b.dataset.test}/test`, {})).output; } catch (e) { o.textContent = "Eroare: " + e.message; }
     }));
+  },
+
+  async checklist() {
+    const dot = (h) => `<span data-dot="${h.id}">${h.online === undefined ? "" : h.online ? '<span class="ok" title="accesibil">●</span>' : `<b class="bad" title="${esc(h.offlineReason || "")}">●</b>`}</span>`;
+    const [items, allHosts] = await Promise.all([
+      api("GET", "/api/checklist"),
+      api("GET", "/api/hosts"),
+    ]);
+    const v = document.getElementById("view");
+    const itemHostIds = new Set(items.map((it) => it.hostId));
+    const availableHosts = allHosts.filter((h) => !itemHostIds.has(h.id));
+
+    const statusBadge = (s) => {
+      if (s === "ok") return '<span class="tag ok" style="font-weight:600">● OK</span>';
+      if (s === "warning") return '<span class="tag bad" style="font-weight:600">⚠️ Atenție</span>';
+      if (s === "error") return '<span class="tag bad" style="font-weight:600">❌ Eroare</span>';
+      return '<span class="tag mut">○ Never checked</span>';
+    };
+
+    v.innerHTML = `
+      <div class="row" style="justify-content:space-between">
+        <h2>Checklist Securitate (${items.length})</h2>
+        <div class="row">
+          <button class="b p" id="cl-open-add">+ Adaugă servere</button>
+          ${items.length ? '<button class="b" id="cl-run-all">Verifică toate</button>' : ""}
+          ${items.length ? '<button class="b d" id="cl-clear-all">Golește checklist</button>' : ""}
+        </div>
+      </div>
+
+      <div class="card" style="border-left:4px solid var(--acc)">
+        <b>Prompt pentru AI (Claude / ChatGPT / Agent):</b>
+        <p class="mut" style="margin:4px 0 8px">
+          AI-ul are acces la uneltele <code>get_security_checklist</code> și <code>run_security_check</code>.
+          Când îi spui: <i>«fă un security check»</i>, el citește această listă și inspectează fiecare server (loguri auth.log / journalctl, login-uri eșuate, sesiuni active, porturi deschise ss, servicii picate systemd și disc).
+        </p>
+        <div class="row">
+          <input id="ai-prompt-input" readonly value="Fă un security check pe serverele din checklist și verifică logurile de autentificare, tentativele eșuate, porturile deschise și serviciile." style="flex:1">
+          <button class="b p" id="ai-prompt-copy">Copiază prompt</button>
+        </div>
+      </div>
+
+      <div id="cl-form-container"></div>
+
+      ${items.length ? "" : '<p class="mut">Checklist-ul este gol. Adaugă servere pentru a fi incluse în verificarea de securitate.</p>'}
+
+      ${items.map((it) => {
+        const h = it.host || {};
+        return `
+          <div class="card" id="cl-card-${it.hostId}">
+            <div class="row" style="justify-content:space-between;align-items:flex-start">
+              <div style="flex:1">
+                <div class="row" style="gap:6px">
+                  ${dot(h)}
+                  <b>${esc(h.name)}</b>
+                  ${h.online === false ? '<span class="tag bad">offline</span>' : ""}
+                  <span class="mut">${esc(h.user)}@${esc(h.hostname)}:${h.port}</span>
+                  <span class="tag">${esc(h.mode)}</span>
+                  ${h.group ? `<span class="tag">${esc(h.group)}</span>` : ""}
+                  ${statusBadge(it.lastStatus)}
+                </div>
+
+                ${it.lastSummary ? `<div style="font-size:13px;margin-top:6px"><b>Rezultat:</b> <span class="${it.lastStatus === 'warning' ? 'bad' : 'ok'}">${esc(it.lastSummary)}</span></div>` : ""}
+
+                <div class="row mut" style="font-size:12px;margin-top:4px;gap:12px">
+                  <span>Adăugat: ${esc(it.addedAt.replace("T", " ").slice(0, 16))}</span>
+                  <span>Ultima verificare: ${it.lastChecked ? esc(it.lastChecked.replace("T", " ").slice(0, 19)) : "Niciodată"}</span>
+                </div>
+
+                ${it.notes ? `<div style="font-size:12px;margin-top:4px"><b>Notițe:</b> <span class="mut">${esc(it.notes)}</span></div>` : ""}
+              </div>
+
+              <div class="row" style="gap:6px">
+                <button class="b p" data-cl-check="${it.hostId}">Verifică acum</button>
+                <button class="b" data-cl-note="${it.hostId}">Notițe</button>
+                <button class="b d" data-cl-remove="${it.hostId}">Elimină</button>
+              </div>
+            </div>
+
+            <pre class="hidden" id="cl-out-${it.hostId}" style="margin-top:10px;max-height:360px;overflow:auto"></pre>
+          </div>
+        `;
+      }).join("")}
+    `;
+
+    document.getElementById("ai-prompt-copy").onclick = () => {
+      const inp = document.getElementById("ai-prompt-input");
+      inp.select();
+      navigator.clipboard.writeText(inp.value);
+      const b = document.getElementById("ai-prompt-copy");
+      b.textContent = "Copiat!";
+      setTimeout(() => (b.textContent = "Copiază prompt"), 2000);
+    };
+
+    const drawAddForm = () => {
+      const container = document.getElementById("cl-form-container");
+      if (!availableHosts.length) {
+        container.innerHTML = '<div class="card"><p class="mut">Toate hosturile configurate se află deja în checklist.</p><button class="b" id="cl-close-form">Închide</button></div>';
+        document.getElementById("cl-close-form").onclick = () => (container.innerHTML = "");
+        return;
+      }
+      container.innerHTML = `
+        <div class="card">
+          <h3>Adaugă servere în Checklist</h3>
+          <p class="mut">Bifează serverele pe care dorești să le incluzi în checklist:</p>
+          <div style="max-height:180px;overflow:auto;border:1px solid var(--line);border-radius:6px;padding:8px;margin-bottom:8px">
+            ${availableHosts.map((h) => `
+              <label style="display:flex;align-items:center;gap:8px;margin:4px 0;cursor:pointer">
+                <input type="checkbox" class="cl-add-chk" value="${h.id}" style="width:auto">
+                <b>${esc(h.name)}</b> <span class="mut">(${esc(h.user)}@${esc(h.hostname)})</span> <span class="tag">${esc(h.mode)}</span>
+              </label>
+            `).join("")}
+          </div>
+          <label>Notițe / Instrucțiuni specifice pentru AI (opțional):</label>
+          <input id="cl-new-notes" placeholder="ex: verifică loguri nginx și auth.log">
+          <p style="margin-top:10px">
+            <button class="b p" id="cl-submit-add">Adaugă în Checklist</button>
+            <button class="b" id="cl-cancel-add">Anulează</button>
+          </p>
+        </div>
+      `;
+      document.getElementById("cl-cancel-add").onclick = () => (container.innerHTML = "");
+      document.getElementById("cl-submit-add").onclick = act(async () => {
+        const selectedIds = [...container.querySelectorAll(".cl-add-chk:checked")].map((c) => c.value);
+        if (!selectedIds.length) throw new Error("Selectează cel puțin un server");
+        const notes = val("cl-new-notes");
+        await api("POST", "/api/checklist", { hostIds: selectedIds, notes: notes || undefined });
+        await views.checklist();
+        void updateBadges();
+      });
+    };
+
+    document.getElementById("cl-open-add").onclick = () => drawAddForm();
+
+    v.querySelectorAll("[data-cl-note]").forEach((b) => (b.onclick = act(async () => {
+      const it = items.find((x) => x.hostId === b.dataset.clNote);
+      const note = prompt("Notițe pentru acest server (instrucțiuni particulare pentru verificare):", it?.notes || "");
+      if (note !== null) {
+        await api("PUT", `/api/checklist/${b.dataset.clNote}`, { notes: note });
+        await views.checklist();
+      }
+    })));
+
+    v.querySelectorAll("[data-cl-remove]").forEach((b) => (b.onclick = act(async () => {
+      if (confirm("Elimini serverul din checklist?")) {
+        const id = b.dataset.clRemove;
+        await api("DELETE", `/api/checklist/${id}`);
+        const card = document.getElementById("cl-card-" + id);
+        if (card) {
+          card.style.opacity = "0";
+          card.style.transition = "opacity 0.2s ease";
+          setTimeout(async () => {
+            await views.checklist();
+            void updateBadges();
+          }, 200);
+        } else {
+          await views.checklist();
+          void updateBadges();
+        }
+      }
+    })));
+
+    const runCheckOn = async (hostId) => {
+      const out = document.getElementById("cl-out-" + hostId);
+      if (out) {
+        out.classList.remove("hidden");
+        out.textContent = "⏳ Se execută verificarea de securitate (sistem, auth, ssh logs, porturi, servicii, resurse)...";
+      }
+      try {
+        const res = await api("POST", `/api/checklist/${hostId}/check`, {});
+        if (out) out.textContent = res.report;
+        return res;
+      } catch (e) {
+        if (out) out.textContent = "Eroare: " + e.message;
+        throw e;
+      }
+    };
+
+    v.querySelectorAll("[data-cl-check]").forEach((b) => (b.onclick = act(async () => {
+      b.disabled = true;
+      try {
+        await runCheckOn(b.dataset.clCheck);
+      } finally {
+        b.disabled = false;
+      }
+    })));
+
+    const clClear = document.getElementById("cl-clear-all");
+    if (clClear) {
+      clClear.onclick = act(async () => {
+        if (confirm("Sigur vrei să golești întreg checklist-ul?")) {
+          await api("POST", "/api/checklist/clear", {});
+          await views.checklist();
+          void updateBadges();
+        }
+      });
+    }
+
+    const clRunAll = document.getElementById("cl-run-all");
+    if (clRunAll) {
+      clRunAll.onclick = act(async () => {
+        clRunAll.disabled = true;
+        clRunAll.textContent = "Se verifică...";
+        try {
+          for (const it of items) {
+            await runCheckOn(it.hostId).catch(() => {});
+          }
+          void updateBadges();
+        } finally {
+          clRunAll.disabled = false;
+          clRunAll.textContent = "Verifică toate";
+        }
+      });
+    }
   },
 
   async k8s() {

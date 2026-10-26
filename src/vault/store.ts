@@ -45,6 +45,15 @@ export interface Token {
   created: string;
 }
 
+export interface ChecklistItem {
+  hostId: string;
+  addedAt: string;
+  notes?: string;
+  lastChecked?: string;
+  lastStatus?: "ok" | "warning" | "error";
+  lastSummary?: string;
+}
+
 export interface VaultData {
   hosts: Host[];
   keys: Key[];
@@ -54,6 +63,7 @@ export interface VaultData {
   settings: { autoLockMinutes: number; maxOutputBytes: number; approvalTimeoutSec: number };
   /** OpenAI Secure MCP Tunnel (ChatGPT). `token` is the raw bearer tunnel-client adds to calls to our MCP port. */
   tunnel?: { tunnelId: string; apiKey: string; token: string; tokenId: string; autoStart: boolean };
+  checklist: ChecklistItem[];
 }
 
 const empty = (): VaultData => ({
@@ -63,6 +73,7 @@ const empty = (): VaultData => ({
   tokens: [],
   knownHosts: {},
   settings: { autoLockMinutes: 30, maxOutputBytes: 65536, approvalTimeoutSec: 120 },
+  checklist: [],
 });
 
 export const sha256 = (s: string) => createHash("sha256").update(s).digest("hex");
@@ -112,7 +123,8 @@ export class Vault {
     }
     this.key = key;
     this.kdf = f.kdf;
-    this.data = { ...empty(), ...JSON.parse(plain) };
+    const raw = JSON.parse(plain);
+    this.data = { ...empty(), ...raw, checklist: Array.isArray(raw.checklist) ? raw.checklist : [] };
     this.touch();
   }
 

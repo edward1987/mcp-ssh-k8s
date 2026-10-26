@@ -3,7 +3,8 @@ import { randomUUID } from "node:crypto";
 export const DEFAULT_ALLOWLIST = [
   "ls", "cat", "head", "tail", "grep", "df", "du", "free", "uptime", "whoami", "id", "hostname",
   "uname", "date", "ps", "top -bn1", "ss", "netstat", "ip addr", "ip route", "lsblk", "stat", "wc",
-  "systemctl status", "systemctl is-active", "systemctl list-units", "journalctl",
+  "systemctl status", "systemctl is-active", "systemctl list-units", "systemctl --failed", "journalctl",
+  "last", "w",
   "docker ps", "docker logs", "docker images", "docker stats --no-stream", "docker inspect",
 ];
 

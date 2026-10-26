@@ -211,6 +211,8 @@ AI models connected via `mcp-ssh` have access to the following scoped tools:
 | Tool | Parameters | Description | Safety Protections |
 | :--- | :--- | :--- | :--- |
 | `list_hosts` | *none* | Returns a JSON array of reachable hosts (name, address, user, tags, mode). | Offline hosts are automatically excluded; secrets are never returned. |
+| `get_security_checklist` | *none* | Lists hosts added to the security checklist with their status, notes, and guidelines. | Secrets excluded; returns target hosts and audit inspection guidelines. |
+| `run_security_check` | `host`, `focus` | Performs an automated read-only security audit (auth logs, failed logins, ports, services, disk). | Read-only non-intrusive audit commands; single approval in approval mode. |
 | `run_command` | `host`, `command`, `timeout_seconds` | Runs a shell command on the specified host and returns stdout, stderr, and exit code. | Filtered by policy (`read-only` allowlist, human `approval` queue, or `free`). |
 | `read_file` | `host`, `path`, `max_bytes` | Reads a text file safely via `cat -- <path>`. | Read-only mode validates file access; binary files or paths with metacharacters are rejected. |
 | `get_host_info` | `host` | Collects vital server stats (OS, kernel, uptime, RAM, disks, listening ports, Docker containers). | Safe, standardized read-only telemetry inspection. |

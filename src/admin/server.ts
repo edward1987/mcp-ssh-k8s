@@ -11,6 +11,7 @@ import { parseTermiusCsv } from "../import/termius.js";
 import { buildFromDump, helperReady, readLocalKeys, runDump, setupHelper, termiusDbDir, type TermiusImport } from "../import/termiusLocal.js";
 import { inspectKubeconfig, runKubectl } from "../k8s/kubectl.js";
 import { findHost, formatResult, type Ctx } from "../service.js";
+import { runHostSecurityAudit } from "../security.js";
 import { runSsh } from "../ssh/exec.js";
 import type { TunnelManager } from "../tunnel/manager.js";
 import { normalizeKey } from "../vault/keys.js";
@@ -202,6 +203,9 @@ export function startAdmin(ctx: Ctx, port: number, webDir: string, tunnel: Tunne
     wrap((req) => {
       vault.d.hosts = vault.d.hosts.filter((h) => h.id !== req.params.id);
       delete vault.d.knownHosts[String(req.params.id)];
+      if (vault.d.checklist) {
+        vault.d.checklist = vault.d.checklist.filter((c) => c.hostId !== req.params.id);
+      }
       vault.save();
     }),
   );
@@ -211,6 +215,101 @@ export function startAdmin(ctx: Ctx, port: number, webDir: string, tunnel: Tunne
     wrap(async (req) => {
       const r = await runSsh(vault, findHost(vault, String(req.params.id)), "echo connected && whoami", 15);
       return { output: formatResult(r) };
+    }),
+  );
+
+  // ---- checklist ----
+  app.get(
+    "/api/checklist",
+    auth,
+    wrap(() => {
+      return (vault.d.checklist || [])
+        .map((item) => {
+          const h = vault.d.hosts.find((x) => x.id === item.hostId);
+          return {
+            ...item,
+            host: h ? publicHost(h) : null,
+          };
+        })
+        .filter((item) => item.host !== null);
+    }),
+  );
+
+  app.post(
+    "/api/checklist",
+    auth,
+    wrap((req) => {
+      const ids: string[] = Array.isArray(req.body.hostIds)
+        ? req.body.hostIds.map(String)
+        : req.body.hostId
+        ? [String(req.body.hostId)]
+        : [];
+      if (!ids.length) throw new Error("no hostId(s) provided");
+
+      let added = 0;
+      const now = new Date().toISOString();
+      if (!vault.d.checklist) vault.d.checklist = [];
+
+      for (const id of ids) {
+        const hostExists = vault.d.hosts.some((h) => h.id === id);
+        if (!hostExists) continue;
+        const existing = vault.d.checklist.find((c) => c.hostId === id);
+        if (existing) {
+          if (req.body.notes !== undefined) existing.notes = req.body.notes;
+        } else {
+          vault.d.checklist.push({
+            hostId: id,
+            addedAt: now,
+            notes: req.body.notes || undefined,
+          });
+          added++;
+        }
+      }
+      vault.save();
+      return { added, total: vault.d.checklist.length };
+    }),
+  );
+
+  app.put(
+    "/api/checklist/:hostId",
+    auth,
+    wrap((req) => {
+      const item = vault.d.checklist?.find((c) => c.hostId === req.params.hostId);
+      if (!item) throw new Error("checklist item not found");
+      if (req.body.notes !== undefined) item.notes = String(req.body.notes);
+      vault.save();
+      return item;
+    }),
+  );
+
+  app.delete(
+    "/api/checklist/:hostId",
+    auth,
+    wrap((req) => {
+      if (!vault.d.checklist) return { ok: true };
+      vault.d.checklist = vault.d.checklist.filter((c) => c.hostId !== req.params.hostId);
+      vault.save();
+      return { ok: true };
+    }),
+  );
+
+  app.post(
+    "/api/checklist/clear",
+    auth,
+    wrap(() => {
+      vault.d.checklist = [];
+      vault.save();
+      return { ok: true };
+    }),
+  );
+
+  app.post(
+    "/api/checklist/:hostId/check",
+    auth,
+    wrap(async (req) => {
+      const host = findHost(vault, String(req.params.hostId));
+      const res = await runHostSecurityAudit(ctx, "operator", host.name, req.body.focus || "all");
+      return res;
     }),
   );
 
