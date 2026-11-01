@@ -1,5 +1,6 @@
 [CmdletBinding()]
 param([switch]$Quiet)
+$env:PSModulePath = [IO.Path]::Combine($PSHOME, 'Modules') + [IO.Path]::PathSeparator + $env:PSModulePath
 $ErrorActionPreference = 'Stop'
 try {
     $config = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'install.json') -Raw -Encoding UTF8 | ConvertFrom-Json

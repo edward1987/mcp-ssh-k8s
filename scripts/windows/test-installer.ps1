@@ -1,4 +1,5 @@
 # Integration test for a disposable GitHub Actions Windows runner only.
+$env:PSModulePath = [IO.Path]::Combine($PSHOME, 'Modules') + [IO.Path]::PathSeparator + $env:PSModulePath
 $ErrorActionPreference = 'Stop'
 if ($env:GITHUB_ACTIONS -ne 'true') { throw 'Run this installation test only on a disposable GitHub Actions runner.' }
 if (Get-Service McpSshK8s -ErrorAction SilentlyContinue) { throw 'Refusing to replace an existing service.' }

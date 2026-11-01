@@ -1,6 +1,6 @@
 # Instalare Windows — MCP SSH K8s
 
-Installerul pentru Windows 10/11 x64 include Node.js. Nu trebuie să instalezi npm sau să clonezi proiectul ca să folosești aplicația. Instalarea cere drepturi de administrator. Serviciul folosește WinSW și .NET Framework 4.6.1 sau mai nou, inclus în versiunile Windows acceptate.
+Installerul pentru Windows 10/11 x64 include Node.js. Nu trebuie să instalezi npm sau să clonezi proiectul ca să folosești aplicația. Instalarea cere drepturi de administrator. Componenta WinSW pentru rularea ca serviciu este inclusă în pachet.
 
 ## Păstrează baza de date de pe acest calculator
 

@@ -1,5 +1,6 @@
 [CmdletBinding()]
 param([switch]$NoBrowser)
+$env:PSModulePath = [IO.Path]::Combine($PSHOME, 'Modules') + [IO.Path]::PathSeparator + $env:PSModulePath
 $ErrorActionPreference = 'Stop'
 $app = $PSScriptRoot
 try {

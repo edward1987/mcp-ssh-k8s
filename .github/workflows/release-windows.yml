@@ -35,6 +35,7 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw 'Inno Setup installation failed.' }
           }
       - name: Build and test installer
+        shell: powershell
         run: npm run release:windows
       - name: Verify install, service, upgrade and uninstall
         shell: powershell

@@ -1,5 +1,7 @@
 [CmdletBinding()]
 param([string]$IsccPath, [switch]$SkipTests)
+# npm may launch Windows PowerShell from pwsh, which inherits pwsh's module paths.
+$env:PSModulePath = [IO.Path]::Combine($PSHOME, 'Modules') + [IO.Path]::PathSeparator + $env:PSModulePath
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 $root = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
