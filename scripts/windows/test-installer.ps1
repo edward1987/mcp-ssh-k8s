@@ -32,6 +32,9 @@ try {
     Assert ($token.token.StartsWith('mcp_')) 'Token creation failed.'
     $vault = Join-Path $data 'vault.json'
     $vaultHash = (Get-FileHash -LiteralPath $vault).Hash
+    Install 'service' $true
+    Assert ((Get-Service McpSshK8s).Status -eq 'Running') 'Upgrade must restart the existing service.'
+    Assert ((Get-FileHash -LiteralPath $vault).Hash -eq $vaultHash) 'Service upgrade changed the existing vault.'
     # Rerun the real installer: recover data location from registry and change to manual mode.
     Install '' $true
     $config = Get-Content (Join-Path $app 'install.json') -Raw -Encoding UTF8 | ConvertFrom-Json

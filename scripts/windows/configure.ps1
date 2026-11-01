@@ -42,6 +42,7 @@ try {
     if ($Action -eq 'Uninstall') {
         if ($service) {
             if ($service.Status -ne 'Stopped') { Stop-Service -Name $serviceName; $service.WaitForStatus('Stopped', [TimeSpan]::FromSeconds(30)) }
+            $service.Dispose()
             Invoke-Wrapper 'uninstall'
         }
         # Only remove installation metadata. Vault, audit, backups and logs are retained.
@@ -128,6 +129,8 @@ try {
     [IO.File]::WriteAllText((Join-Path $InstallDir 'install.json'), $config, $utf8)
     if ($service) {
         if ($service.Status -ne 'Stopped') { Stop-Service -Name $serviceName; $service.WaitForStatus('Stopped', [TimeSpan]::FromSeconds(30)) }
+        # Close SCM handles before reinstalling the same service ID during an upgrade.
+        $service.Dispose()
         Invoke-Wrapper 'uninstall'
     }
     if ($EnableService -eq 1) {
