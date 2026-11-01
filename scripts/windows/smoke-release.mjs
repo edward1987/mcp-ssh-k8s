@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { createHash, generateKeyPairSync } from 'node:crypto';
-import { existsSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -73,7 +73,10 @@ try {
   assert.deepEqual(await request('/api/status'), { exists: false, unlocked: false });
   assert.match(await (await fetch(url)).text(), /MCP SSH/);
   csrf = (await request('/api/setup', 'POST', { password })).csrf;
-  assert.equal(realpathSync((await request('/api/storage')).dataDir), realpathSync(data));
+  // Windows 8.3 names and full names can identify the same directory. Compare file IDs.
+  const actualDirectory = statSync((await request('/api/storage')).dataDir, { bigint: true });
+  const expectedDirectory = statSync(data, { bigint: true });
+  assert.deepEqual([actualDirectory.dev, actualDirectory.ino], [expectedDirectory.dev, expectedDirectory.ino]);
   const token = await request('/api/tokens', 'POST', { name: 'installer-smoke' });
   assert(token.token.startsWith('mcp_'));
   const vaultPath = join(data, 'vault.json');
