@@ -111,6 +111,7 @@ export function startAdmin(ctx: Ctx, port: number, webDir: string, tunnel: Tunne
     }),
   );
   app.post("/api/lock", auth, wrap(() => vault.lock()));
+  app.get("/api/storage", auth, (_req, res) => res.json({ dataDir: resolve(opts.dataDir) }));
 
   // ---- hosts ----
   const publicHost = (h: Host) => {

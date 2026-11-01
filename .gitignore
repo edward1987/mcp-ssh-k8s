@@ -32,3 +32,7 @@ Thumbs.db
 # Test coverage & caches
 coverage/
 .vitest/
+
+# Windows release staging, downloads and installers (never commit local data)
+.release-cache/
+release/

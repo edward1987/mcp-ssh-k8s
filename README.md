@@ -123,6 +123,14 @@ Connecting ChatGPT Web to a local MCP server presents a unique architectural pro
 
 ## Installation & Quick Start
 
+### Windows installer (recommended)
+
+Download the **[latest Windows installer](https://github.com/edward1987/mcp-ssh-k8s/releases/latest)**. Node.js is included. During setup, choose your data folder and whether to **start automatically with Windows as a service**.
+
+Already using this project? Stop the old instance and select its existing `data` folder (the one containing `vault.json`). Setup backs up and reuses your vault and audit history; your master password and MCP tokens remain the same. The vault must be unlocked in the browser after each restart. Uninstalling preserves your data.
+
+**[Windows installation and existing database guide / Ghid Windows (RO)](docs/WINDOWS_INSTALL.md)**
+
 ### Prerequisites
 - **Node.js**: `v20.x` or higher
 - **npm**: `v9.x` or higher

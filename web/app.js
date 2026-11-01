@@ -703,11 +703,14 @@ const views = {
 
   async settings() {
     const s = await api("GET", "/api/settings");
+    const storage = await api("GET", "/api/storage");
     document.getElementById("view").innerHTML = `<h2>Setări</h2><div class="card"><div class="grid">
       <div><label>Auto-lock după (minute, 0 = niciodată)</label><input id="s-lock" type="number" value="${s.autoLockMinutes}"></div>
       <div><label>Limită output (bytes)</label><input id="s-out" type="number" value="${s.maxOutputBytes}"></div>
       <div><label>Timeout aprobare (secunde)</label><input id="s-ap" type="number" value="${s.approvalTimeoutSec}"></div></div>
       <p><button class="b p" id="s-save">Salvează</button></p></div>
+      <div class="card"><h3>Date locale</h3><p>Folderul bazei de date: <code>${esc(storage.dataDir)}</code></p>
+      <p class="mut">Vault-ul criptat, istoricul și componentele locale se păstrează aici. Folosește același folder când reinstalezi aplicația. După repornire, deblochează vault-ul cu parola master.</p></div>
       <div class="card"><h3>Schimbă parola master</h3><label>Parola veche</label><input id="p-old" type="password">
       <label>Parola nouă (min. 12)</label><input id="p-new" type="password"><p><button class="b" id="p-save">Schimbă</button></p></div>`;
     document.getElementById("s-save").onclick = act(async () => { await api("PUT", "/api/settings", { autoLockMinutes: val("s-lock"), maxOutputBytes: val("s-out"), approvalTimeoutSec: val("s-ap") }); alert("Salvat"); });

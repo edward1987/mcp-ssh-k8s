@@ -1,0 +1,64 @@
+name: Windows release
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-2022
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.22.1'
+          cache: npm
+      - name: Check release tag
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        run: |
+          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          if ($env:GITHUB_REF_NAME -ne "v$version") { throw 'Tag and package.json version differ.' }
+      - name: Install build dependencies
+        run: npm ci
+      - name: Install Inno Setup
+        shell: pwsh
+        run: |
+          if (-not (Test-Path 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe')) {
+            choco install innosetup --version=6.4.3 --yes --no-progress
+            if ($LASTEXITCODE -ne 0) { throw 'Inno Setup installation failed.' }
+          }
+      - name: Build and test installer
+        run: npm run release:windows
+      - name: Verify install, service, upgrade and uninstall
+        shell: powershell
+        run: ./scripts/windows/test-installer.ps1
+      - name: Upload diagnostic logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: installer-diagnostics
+          path: .release-cache/*.log
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-installer
+          path: |
+            release/*-setup.exe
+            release/SHA256SUMS.txt
+            release/RELEASE-NOTES.md
+          if-no-files-found: error
+      - name: Publish GitHub release
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = $env:GITHUB_REF_NAME
+          gh release create $tag --verify-tag --title "MCP SSH K8s $tag | Windows installer" --notes-file release/RELEASE-NOTES.md release/*-setup.exe release/SHA256SUMS.txt
+          if ($LASTEXITCODE -ne 0) { throw 'Release publication failed.' }

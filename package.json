@@ -1,13 +1,14 @@
 {
   "name": "mcp-ssh-k8s",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "tsx src/index.ts",
     "build": "tsc",
     "start": "node dist/index.js",
-    "test": "vitest run"
+    "test": "vitest run",
+    "release:windows": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/windows/build-release.ps1"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.1",
