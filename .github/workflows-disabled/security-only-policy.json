@@ -1,0 +1,14 @@
+{
+  "reason": "User-requested security-only GitHub Actions; retained workflows are triggered only by push; automatic repeat triggers removed.",
+  "original_branch_head": "da7d703541f528b20df87b9d8d5e66fb5f52da03",
+  "branch": "master",
+  "disabled": [
+    ".github/workflows/release-windows.yml",
+    ".github/workflows/release-container.yml"
+  ],
+  "security_only": [
+    ".github/workflows/security.yml"
+  ],
+  "restore": "Original exact workflow blobs archived alongside this manifest. Revert the policy commit to restore.",
+  "merge_resolution": "New release workflow retained in the archive; new security workflow activated with push as its only trigger. Original security workflow retained alongside this manifest."
+}
