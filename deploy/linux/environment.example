@@ -1,0 +1,10 @@
+# Omit GATEWAY_PORT to keep the workstation's loopback-only mode.
+AUTH_URL=https://mcp.example.com
+MCP_PUBLIC_URL=https://mcp.example.com/mcp
+GATEWAY_PORT=8080
+GATEWAY_BIND=127.0.0.1
+# KUBECTL_PATH=/usr/local/bin/kubectl
+# For a signed release, pin the trusted Ed25519 SPKI DER public key (base64),
+# obtained independently from the release producer. Keep this file root-owned.
+# MCP_SSH_REQUIRE_SIGNED_INTEGRITY=1
+# MCP_SSH_INTEGRITY_PUBLIC_KEY=BASE64_PUBLIC_KEY

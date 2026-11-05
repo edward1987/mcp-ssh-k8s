@@ -1,6 +1,6 @@
+import { requireAccess, identityContext } from "./auth/context.js";
 import { findHost, formatResult, type Ctx } from "./service.js";
 import { runSsh } from "./ssh/exec.js";
-import type { Host } from "./vault/store.js";
 
 export interface SecurityAuditResult {
   host: string;
@@ -8,6 +8,8 @@ export interface SecurityAuditResult {
   status: "ok" | "warning";
   summary: string;
   report: string;
+  complete: boolean;
+  checks: { command: string; ok: boolean; exitCode: number | null; error?: string }[];
   details: {
     system?: string;
     logins?: string;
@@ -34,15 +36,16 @@ export async function runHostSecurityAudit(
   focus?: "all" | "auth" | "ports" | "services" | "system",
 ): Promise<SecurityAuditResult> {
   const { vault, audit, approvals } = ctx;
-  vault.touch();
+  if (!ctx.registry) vault.touch();
   const host = findHost(vault, hostRef);
+  requireAccess(ctx, "host", host.id);
 
   if (ctx.monitor && !ctx.monitor.isOnline(host)) {
     throw new Error(`host "${host.name}" is offline (use list_hosts or get_security_checklist for status)`);
   }
 
   // Operator in UI is trusted; MCP client must adhere to host mode
-  if (client !== "operator" && host.mode === "approval") {
+  if (!identityContext.getStore()?.operator && host.mode === "approval") {
     const d = await approvals.request(
       {
         host: host.name,
@@ -57,16 +60,23 @@ export async function runHostSecurityAudit(
     }
   }
 
+  const checks: SecurityAuditResult["checks"] = [];
+  const warnings: string[] = [];
   const exec = async (cmd: string): Promise<string> => {
     try {
+      requireAccess(ctx, "host", host.id);
       const res = await runSsh(vault, host, cmd, 15);
+      // grep exit 1 means no matching entries, rather than an execution failure.
+      const noMatches = cmd === "grep -i failed /var/log/auth.log" && res.exitCode === 1 && !res.stderr && !res.stdout;
+      const ok = (res.exitCode === 0 || noMatches) && !res.timedOut && !res.truncated && !/permission denied|operation not permitted|not seeing messages from other users|insufficient permissions/i.test(res.stderr + res.stdout);
+      checks.push({ command: cmd, ok, exitCode: res.exitCode, ...(ok ? {} : { error: res.timedOut ? "timeout" : res.truncated ? "output truncated" : `exit ${res.exitCode}; output may be unavailable or incomplete` }) });
       return formatResult(res).trim();
     } catch (e) {
+      checks.push({ command: cmd, ok: false, exitCode: null, error: (e as Error).message });
       return `[error executing "${cmd}": ${(e as Error).message}]`;
     }
   };
 
-  const warnings: string[] = [];
   const details: SecurityAuditResult["details"] = {};
 
   // 1. System Overview
@@ -89,10 +99,10 @@ export async function runHostSecurityAudit(
 
     // Check failed auth attempts
     let sshLogs = await exec("journalctl -u ssh -p err --no-pager -n 30");
-    if (!sshLogs || sshLogs.includes("No entries") || sshLogs.includes("error")) {
+    if (!checks.at(-1)?.ok || !sshLogs || sshLogs.includes("No entries")) {
       sshLogs = await exec("journalctl -u sshd -p err --no-pager -n 30");
     }
-    if (!sshLogs || sshLogs.includes("No entries") || sshLogs.includes("error")) {
+    if (!checks.at(-1)?.ok || !sshLogs || sshLogs.includes("No entries")) {
       sshLogs = await exec("grep -i failed /var/log/auth.log");
     }
     failedOut = sshLogs || "(no failed ssh/auth log entries found)";
@@ -109,7 +119,7 @@ export async function runHostSecurityAudit(
   let portsOut = "";
   if (!focus || focus === "all" || focus === "ports") {
     portsOut = await exec("ss -tulpn");
-    if (portsOut.includes("error") || !portsOut) {
+    if (!checks.at(-1)?.ok || !portsOut) {
       portsOut = await exec("netstat -tulpn");
     }
     details.ports = portsOut;
@@ -143,6 +153,8 @@ export async function runHostSecurityAudit(
     }
   }
 
+  const complete = checks.every(c => c.ok);
+  if (!complete) warnings.unshift(`Security check incomplete: ${checks.filter(c => !c.ok).length} command(s) failed or returned incomplete output`);
   const status: "ok" | "warning" = warnings.length > 0 ? "warning" : "ok";
   const summary = warnings.length > 0 ? `Atenție: ${warnings.join(", ")}` : "OK - Nicio problemă critică detectată";
   const ts = new Date().toISOString();
@@ -186,6 +198,8 @@ export async function runHostSecurityAudit(
     status,
     summary,
     report,
+    complete,
+    checks,
     details,
   };
 }

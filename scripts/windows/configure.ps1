@@ -64,9 +64,9 @@ try {
             if (Test-Path -LiteralPath (Join-Path $DataDir 'vault.json')) {
                 $backup = Join-Path $DataDir ('backups\before-install-' + (Get-Date -Format 'yyyyMMdd-HHmmss-fff'))
                 New-Item -ItemType Directory -Path $backup -Force | Out-Null
-                foreach ($name in @('vault.json', 'audit.jsonl')) {
+                foreach ($name in @('vault.json', 'audit.jsonl', 'identity', 'vaults')) {
                     $source = Join-Path $DataDir $name
-                    if (Test-Path -LiteralPath $source) { Copy-Item -LiteralPath $source -Destination (Join-Path $backup $name) }
+                    if (Test-Path -LiteralPath $source) { Copy-Item -LiteralPath $source -Destination (Join-Path $backup $name) -Recurse }
                 }
                 Write-Output "Backup: $backup"
             }
@@ -93,13 +93,15 @@ try {
     }
     if ($EnableService -eq 1) {
         # Locale-independent SID for NT AUTHORITY\LocalService. Preserve existing folder ACLs.
-        & icacls.exe $DataDir /grant '*S-1-5-19:(OI)(CI)M' | Out-Null
+        & icacls.exe $DataDir /grant '*S-1-5-19:(OI)(CI)M' /T | Out-Null
         if ($LASTEXITCODE -ne 0) { throw 'Cannot grant LocalService access to the data folder.' }
     }
     New-Item -ItemType Directory -Force -Path (Join-Path $DataDir 'logs') | Out-Null
     $escape = { param($s) [Security.SecurityElement]::Escape($s) }
     $dataXml = & $escape $DataDir
     $appXml = & $escape $InstallDir
+    $integrityKey = (Get-Content -LiteralPath (Join-Path $InstallDir 'integrity.pub') -Raw).Trim()
+    $integrityKeyXml = & $escape $integrityKey
     $displayName = 'MCP SSH K8s'
     if ($ServiceName -ne 'McpSshK8s') { $displayName += " ($ServiceName)" }
     $xml = @"
@@ -108,12 +110,14 @@ try {
   <name>$displayName</name>
   <description>Local SSH and Kubernetes MCP gateway. Unlock the vault at http://127.0.0.1:$AdminPort after each restart.</description>
   <executable>$appXml\runtime\node.exe</executable>
-  <arguments>&quot;$appXml\dist\index.js&quot;</arguments>
+  <arguments>&quot;$appXml\scripts\start.mjs&quot;</arguments>
   <workingdirectory>$appXml</workingdirectory>
   <env name="MCP_SSH_DATA" value="$dataXml" />
   <env name="ADMIN_PORT" value="$AdminPort" />
   <env name="MCP_PORT" value="$McpPort" />
   <env name="MCP_BIND" value="127.0.0.1" />
+  <env name="MCP_SSH_REQUIRE_SIGNED_INTEGRITY" value="1" />
+  <env name="MCP_SSH_INTEGRITY_PUBLIC_KEY" value="$integrityKeyXml" />
   <startmode>Automatic</startmode>
   <delayedAutoStart>true</delayedAutoStart>
   <serviceaccount><domain>NT AUTHORITY</domain><user>LocalService</user></serviceaccount>
@@ -125,7 +129,7 @@ try {
 "@
     $xmlFile = Join-Path $InstallDir 'mcp-ssh-service.xml'
     [IO.File]::WriteAllText($xmlFile, $xml, $utf8)
-    $config = @{ schemaVersion = 1; dataDir = $DataDir; serviceEnabled = ($EnableService -eq 1); serviceName = $ServiceName; adminPort = $AdminPort; mcpPort = $McpPort } | ConvertTo-Json
+    $config = @{ schemaVersion = 1; dataDir = $DataDir; serviceEnabled = ($EnableService -eq 1); serviceName = $ServiceName; adminPort = $AdminPort; mcpPort = $McpPort; integrityPublicKey = $integrityKey } | ConvertTo-Json
     [IO.File]::WriteAllText((Join-Path $InstallDir 'install.json'), $config, $utf8)
     if ($service) {
         if ($service.Status -ne 'Stopped') { Stop-Service -Name $serviceName; $service.WaitForStatus('Stopped', [TimeSpan]::FromSeconds(30)) }

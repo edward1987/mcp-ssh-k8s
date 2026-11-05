@@ -59,6 +59,11 @@ describe("read-only policy", () => {
     expect(checkReadOnly("nginx -t", ["nginx -t"]).ok).toBe(true);
     expect(checkReadOnly("nginx -s stop", ["nginx -t"]).ok).toBe(false);
   });
+  it('rejects setters hidden behind inspection commands, quoted flags and short option bundles', () => {
+    for (const command of ['ip addr a 10.0.0.1/24 dev eth0', 'ip route d default', 'ip addr fl dev eth0']) expect(ok(command), command).toBe(false);
+    for (const command of ['hostname attacker', 'hostname -F /tmp/name', 'date 010100002026', 'date -s now', 'date --s""et=now', 'ip addr add 10.0.0.1/24 dev eth0', 'ip route replace default via 10.0.0.1', 'ss -K dst 10.0.0.1', 'ss -tK', 'ss --kill', 'journalctl --rotate', 'journalctl --flush', 'journalctl --vacuum-size=1K', 'journalctl --setup-keys', 'uname -S attacker']) expect(ok(command), command).toBe(false);
+    for (const command of ['hostname -f', 'date -u +%FT%T', 'uname -a', 'ip addr show dev eth0', 'ip route get 10.0.0.1', 'ss -tulpn', 'journalctl -u ssh --no-pager -n 30']) expect(ok(command), command).toBe(true);
+  });
 });
 
 describe("importers", () => {

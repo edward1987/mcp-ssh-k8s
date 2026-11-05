@@ -1,0 +1,107 @@
+name: Signed container release
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: container-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24.22.2'
+          cache: npm
+      - name: Validate release source and version
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          version=$(node -p "require('./package.json').version")
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            test "$GITHUB_REF_NAME" = "v$version"
+            tag="$version"
+          else
+            test "$GITHUB_REF_NAME" = "$DEFAULT_BRANCH"
+            tag="candidate-${GITHUB_SHA}"
+          fi
+          image_name="ghcr.io/${GITHUB_REPOSITORY,,}"
+          printf 'IMAGE_NAME=%s\nIMAGE_TAG=%s:%s\n' "$image_name" "$image_name" "$tag" >> "$GITHUB_ENV"
+      - run: npm ci --ignore-scripts --no-fund
+      - run: npm audit --audit-level=moderate
+      - name: Test Linux application build
+        run: docker build --target test .
+      - name: Build signed production image
+        env:
+          MCP_SSH_INTEGRITY_SIGNING_KEY: ${{ secrets.MCP_SSH_INTEGRITY_SIGNING_KEY }}
+        run: node scripts/build-container.mjs --tag "$IMAGE_TAG" --output release/container/build.json
+      - name: Test the exact image before publication
+        env:
+          TEST_IMAGE: ${{ env.IMAGE_TAG }}
+        run: npm run test:container
+      - name: Install verified kind CLI
+        run: |
+          mkdir -p "$RUNNER_TEMP/mcp-ssh-tools"
+          cd "$RUNNER_TEMP/mcp-ssh-tools"
+          curl -fsSLo kind https://github.com/kubernetes-sigs/kind/releases/download/v0.33.0/kind-linux-amd64
+          curl -fsSLo kind.sha256sum https://github.com/kubernetes-sigs/kind/releases/download/v0.33.0/kind-linux-amd64.sha256sum
+          echo "$(cut -d ' ' -f1 kind.sha256sum)  kind" | sha256sum -c -
+          chmod +x kind
+          echo "$RUNNER_TEMP/mcp-ssh-tools" >> "$GITHUB_PATH"
+      - name: Test Kubernetes deployment
+        env:
+          TEST_IMAGE: ${{ env.IMAGE_TAG }}
+        run: npm run test:k8s
+      - name: Scan CVEs and produce SBOM
+        run: |
+          scanner=aquasec/trivy:0.76.1@sha256:790fd66d1697395d8693d1acaa1ea702406a20f109b6fc7bac8db623eca6c06c
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock "$scanner" image --scanners vuln --severity HIGH,CRITICAL --exit-code 1 "$IMAGE_TAG"
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock "$scanner" image --format spdx-json "$IMAGE_TAG" > release/container/sbom.spdx.json
+      - name: Publish the tested image to GHCR
+        id: publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          printf '%s' "$GH_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+          docker push "$IMAGE_TAG"
+          reference=$(docker image inspect "$IMAGE_TAG" --format '{{index .RepoDigests 0}}')
+          [[ "$reference" == "$IMAGE_NAME"@sha256:* ]]
+          printf 'reference=%s\ndigest=%s\n' "$reference" "${reference#*@}" >> "$GITHUB_OUTPUT"
+      - name: Attest the published digest
+        uses: actions/attest-build-provenance@8beda2b7ed98355c0e97c0a63bec38ae472e66c4 # v4
+        with:
+          subject-name: ${{ env.IMAGE_NAME }}
+          subject-digest: ${{ steps.publish.outputs.digest }}
+          push-to-registry: true
+      - name: Generate deployment bundle at the published digest
+        env:
+          RELEASE_REFERENCE: ${{ steps.publish.outputs.reference }}
+        run: node scripts/render-deployment.mjs --image "$RELEASE_REFERENCE" --build-metadata release/container/build.json --output release/container/deployment
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: signed-container-release
+          path: |
+            release/container/build.json
+            release/container/sbom.spdx.json
+            release/container/deployment/
+          if-no-files-found: error
+      - name: Describe the release
+        env:
+          RELEASE_REFERENCE: ${{ steps.publish.outputs.reference }}
+        run: |
+          printf 'Signed Linux amd64 image: %s\n\nDeployment bundle and SBOM are attached to this run.\n' "$RELEASE_REFERENCE" >> "$GITHUB_STEP_SUMMARY"

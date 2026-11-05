@@ -1,0 +1,97 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mcp-ssh-data
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mcp-ssh
+spec:
+  # SQLite and in-memory vaults/approvals require a SINGLE writer. Do not add an HPA.
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: mcp-ssh
+  template:
+    metadata:
+      labels:
+        app: mcp-ssh
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 20
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: app
+          # Replace with the verified digest from the release bundle.
+          image: ghcr.io/replace-owner/mcp-ssh-k8s@sha256:0000000000000000000000000000000000000000000000000000000000000000
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          env:
+            - name: AUTH_URL
+              value: https://mcp.example.com
+            - name: MCP_PUBLIC_URL
+              value: https://mcp.example.com/mcp
+            - name: MCP_SSH_REQUIRE_SIGNED_INTEGRITY
+              value: "1"
+            - name: MCP_SSH_INTEGRITY_PUBLIC_KEY
+              valueFrom:
+                configMapKeyRef:
+                  name: mcp-ssh-integrity
+                  key: public-key
+          ports:
+            - name: http
+              containerPort: 8080
+          startupProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 2
+            failureThreshold: 30
+          readinessProbe:
+            httpGet: { path: /readyz, port: http }
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 15
+          resources:
+            requests: { cpu: 100m, memory: 384Mi }
+            limits: { cpu: "2", memory: 768Mi }
+          volumeMounts:
+            - { name: data, mountPath: /var/lib/mcp-ssh }
+            - { name: temp, mountPath: /tmp }
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: mcp-ssh-data
+        - name: temp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 64Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mcp-ssh
+spec:
+  type: ClusterIP
+  selector:
+    app: mcp-ssh
+  ports:
+    - { name: http, port: 8080, targetPort: http }

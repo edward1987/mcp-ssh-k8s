@@ -18,7 +18,7 @@ D:\apps\mcp-ssh\data
 4. Verifică mesajul **Am găsit un vault existent** și calea afișată în rezumat.
 5. Bifează **Pornește automat cu Windows ca serviciu** dacă dorești acest lucru. Opțiunea este debifată implicit la prima instalare.
 6. După instalare, deschide **MCP SSH K8s** din Start sau intră la [http://127.0.0.1:7777](http://127.0.0.1:7777).
-7. Introdu **parola master actuală**. Serverele, cheile, clusterele, tokenurile, setările și configurația tunelului rămân aceleași.
+7. Configureaza administratorul si MFA cu parola master actuala, apoi reconecteaza clientii prin OAuth. Hosturile si credentele SSH sunt pastrate; tokenurile globale sunt invalidate. Vezi [AUTHENTICATION.md](AUTHENTICATION.md).
 
 Installerul nu mută și nu convertește baza. Folosește direct folderul ales și creează înainte de instalare o copie a `vault.json` și `audit.jsonl` în `data\backups\before-install-...`. Păstrează întregul folder; nu șterge checkout-ul dacă ai ales folderul lui `data`.
 
@@ -67,7 +67,15 @@ Logurile serviciului și ale pornirilor manuale se găsesc în `<folder-date>\lo
 .\mcp-ssh-k8s-0.2.0-windows-x64-setup.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /TASKS="" /DATADIR="D:\MCP-SSH-Data"
 ```
 
+## Claude Desktop, Codex Desktop și clienții CLI
+
+După deblocarea vault-ului, deschide **Clienți AI**, selectează aplicația și generează configurarea. Sunt disponibile Claude Desktop, Codex Desktop, Codex CLI și Claude CLI (Claude Code). Configurarea Claude Desktop folosește Node.js inclus în installer și puntea locală stdio; nu necesită instalarea separată a Node.js sau descărcarea unui proxy prin npx. Codex Desktop și Codex CLI folosesc aceeași secțiune din `~/.codex/config.toml`.
+
+Copiază configurarea în client, păstrând celelalte intrări, și repornește-l. Serverul trebuie să ruleze, iar vault-ul să fie deblocat. Tokenurile se pot revoca din **Tokenuri MCP**. Configurarea pentru Desktop trebuie generată din instanța instalată; căile unui checkout din surse nu se mută automat în folderul installerului. Vezi [ghidul de conectare](GHID_UTILIZARE.md#8-conectarea-clienților-ai).
+
 ## Construirea unui release
+
+Buildul necesită cheia privată Ed25519 din secretul CI `MCP_SSH_INTEGRITY_SIGNING_KEY`; refuză distribuirea unui installer nesemnat la nivel de manifest. Cheia nu intră în Git sau în installer. Vezi [configurarea integrității și recuperarea după incident](INTEGRITY.md). Semnătura manifestului este distinctă de semnătura Authenticode a installerului.
 
 Pe Windows, cu Node.js/npm și Inno Setup 6.3+ instalate:
 

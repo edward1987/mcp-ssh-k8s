@@ -1,0 +1,16 @@
+{
+  "reviewedOn": "2026-11-05",
+  "scanner": "Trivy 0.76.1",
+  "image": "mcp-ssh-k8s:security-audit-test",
+  "imageId": "sha256:f0b1807390ab87da348f94dfb6a91b595c634a8a9052cf420de7f1f771a4efc9",
+  "architecture": "amd64",
+  "signature": "Ed25519, ephemeral isolated test key; not a production release",
+  "critical": 0,
+  "high": 0,
+  "severitiesScanned": [
+    "HIGH",
+    "CRITICAL"
+  ],
+  "findings": [],
+  "remediation": "Removed the unused system zlib1g library files and corresponding package records from the distroless base. Node and unzip dynamic dependencies were checked; Node bundles its own zlib. CVE-2026-76844 is not suppressed."
+}

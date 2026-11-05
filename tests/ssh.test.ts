@@ -3,15 +3,19 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import ssh2 from "ssh2";
+import { generateKeyPairSync } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { Audit } from "../src/audit.js";
 import { Approvals } from "../src/policy/policy.js";
 import { runCommand } from "../src/service.js";
 import { Vault } from "../src/vault/store.js";
+import { runSsh } from "../src/ssh/exec.js";
 
 const { Server, utils } = ssh2;
-const hostKey = utils.generateKeyPairSync("ed25519").private;
-const userKey = utils.generateKeyPairSync("ed25519");
+// Use Node's PEM encoder rather than ssh2's intermittently malformed OpenSSH fixture export.
+const fixture = () => generateKeyPairSync('rsa', { modulusLength: 2048, privateKeyEncoding: { type: 'pkcs1', format: 'pem' }, publicKeyEncoding: { type: 'spki', format: 'pem' } }).privateKey;
+const hostKey = fixture();
+const userKey = { private: fixture() };
 
 let server: InstanceType<typeof Server>;
 let port: number;
@@ -25,6 +29,7 @@ beforeAll(async () => {
       client.on("session", (accept) =>
         accept().on("exec", (acceptExec, _r, info) => {
           const s = acceptExec();
+          if (info.command === 'never-finish') return;
           s.write(`ran: ${info.command}\n`);
           s.exit(0);
           s.end();
@@ -43,7 +48,7 @@ beforeAll(async () => {
     vault.d.hosts.push({ id: mode, name: mode, hostname: "127.0.0.1", port, user: "u", auth: "key", keyId: "k", mode, allowlist: [] });
   ctx = { vault, audit: new Audit(join(dir, "audit.jsonl")), approvals: new Approvals() };
 });
-afterAll(() => server.close());
+afterAll(() => server?.close());
 
 describe("run_command end to end", () => {
   it("runs allowlisted command on read-only host and pins host key", async () => {
@@ -73,5 +78,10 @@ describe("run_command end to end", () => {
     await new Promise((r) => setTimeout(r, 100));
     ctx.approvals.decide(ctx.approvals.list()[0].id, "denied");
     await expect(p).rejects.toThrow(/denied/);
+  });
+  it('terminates an unresponsive SSH channel at its deadline', async () => {
+    const host = ctx.vault.d.hosts.find(h => h.id === 'read-only')!;
+    const result = await runSsh(ctx.vault, host, 'never-finish', 0.2);
+    expect(result.timedOut).toBe(true); expect(result.exitCode).toBeNull();
   });
 });

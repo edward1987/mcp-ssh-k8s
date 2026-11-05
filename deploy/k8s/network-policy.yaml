@@ -1,0 +1,33 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: mcp-ssh
+spec:
+  podSelector:
+    matchLabels: { app: mcp-ssh }
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: traefik }
+          podSelector:
+            matchLabels: { app.kubernetes.io/name: traefik }
+      ports:
+        - { protocol: TCP, port: 8080 }
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: kube-system }
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }
+    # Replace these documentation CIDRs with explicitly approved SSH/API destinations.
+    - to:
+        - ipBlock: { cidr: 192.0.2.0/24 }
+      ports:
+        - { protocol: TCP, port: 22 }
+    - to:
+        - ipBlock: { cidr: 198.51.100.0/24 }
+      ports:
+        - { protocol: TCP, port: 443 }
+        - { protocol: TCP, port: 6443 }

@@ -1,18 +1,15 @@
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
-import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync, chmodSync } from "node:fs";
 import { join } from "node:path";
-import { sha256, type Vault } from "../vault/store.js";
+import { type Vault } from "../vault/store.js";
+import type { IdentityStore } from '../auth/store.js';
 
 const REPO = "openai/tunnel-client";
 const HEALTH_PORT = 7779;
 const ID_RE = /^tunnel_[A-Za-z0-9]+$/;
 
-/**
- * Runs OpenAI's `tunnel-client` (Secure MCP Tunnel) so ChatGPT can reach the local MCP port with no public listener.
- * ChatGPT connects with "no auth" through the OpenAI-hosted tunnel endpoint; tunnel-client adds our bearer token
- * (`--mcp.extra-headers`) to every request, so the token never leaves this machine.
- */
+/** Private network transport only. Each upstream request must carry its own OAuth access token. */
 export class TunnelManager {
   private child: ChildProcess | null = null;
   private logs: string[] = [];
@@ -23,7 +20,12 @@ export class TunnelManager {
     private vault: Vault,
     private dataDir: string,
     private mcpPort: number,
+    private identities?: IdentityStore,
+    private authOrigin?: string,
   ) {}
+
+  private get config(): any { return this.identities ? this.identities.get('runtime', 'tunnel') : this.vault.d.tunnel; }
+  private credentials(): any { const c = this.config; return c && this.identities ? { ...c, apiKey: this.identities.open(c.apiKey) } : c; }
 
   private get binDir() {
     return join(this.dataDir, "bin");
@@ -36,7 +38,7 @@ export class TunnelManager {
   }
 
   private redact(line: string) {
-    const key = this.vault.unlocked ? this.vault.d.tunnel?.apiKey : undefined;
+    const key = this.identities ? this.credentials()?.apiKey : this.vault.unlocked ? this.vault.d.tunnel?.apiKey : undefined;
     return (key ? line.split(key).join("[redacted]") : line).replace(/sk-[A-Za-z0-9_-]{6,}/g, "[redacted]");
   }
 
@@ -50,7 +52,7 @@ export class TunnelManager {
   }
 
   async status() {
-    const cfg = this.vault.d.tunnel;
+    const cfg = this.config;
     let ready: boolean | null = null;
     if (this.child) {
       try {
@@ -78,29 +80,21 @@ export class TunnelManager {
   }
 
   configure(b: { tunnelId?: string; apiKey?: string; autoStart?: boolean }) {
-    const cur = this.vault.d.tunnel;
+    const cur = this.credentials();
     const tunnelId = String(b.tunnelId ?? cur?.tunnelId ?? "").trim();
     if (!ID_RE.test(tunnelId)) throw new Error('tunnel id must look like "tunnel_0123abc..." (copy it from platform.openai.com > Tunnels)');
     const apiKey = String(b.apiKey || cur?.apiKey || "").trim();
     if (!apiKey) throw new Error("runtime API key is required");
-    this.vault.d.tunnel = {
+    const config = {
       tunnelId,
       apiKey,
       token: cur?.token ?? "",
       tokenId: cur?.tokenId ?? "",
       autoStart: b.autoStart ?? cur?.autoStart ?? false,
     };
-    this.ensureToken();
-    this.vault.save();
-  }
 
-  /** Dedicated MCP bearer token for tunnel-client; revoking it in the tokens tab cuts ChatGPT off. */
-  private ensureToken() {
-    const t = this.vault.d.tunnel!;
-    if (t.token && this.vault.d.tokens.some((x) => x.id === t.tokenId)) return;
-    t.token = "mcp_" + randomBytes(32).toString("base64url");
-    t.tokenId = randomUUID();
-    this.vault.d.tokens.push({ id: t.tokenId, name: "chatgpt-tunnel", hash: sha256(t.token), created: new Date().toISOString() });
+    if (this.identities) this.identities.put('runtime', 'tunnel', { ...config, apiKey: this.identities.seal(apiKey) });
+    else { this.vault.d.tunnel = config; this.vault.save(); }
   }
 
   async install() {
@@ -153,22 +147,23 @@ export class TunnelManager {
 
   start() {
     if (this.child) return;
-    const cfg = this.vault.d.tunnel;
+    const cfg = this.credentials();
     if (!cfg?.tunnelId || !cfg.apiKey) throw new Error("configure the tunnel id and runtime API key first");
     if (!this.installed) throw new Error("tunnel-client is not installed yet");
-    this.ensureToken();
-    this.vault.save();
+
+    if (!this.identities) this.vault.save();
     this.lastError = "";
     const args = [
       "run",
       "--control-plane.tunnel-id", cfg.tunnelId,
       "--mcp.server-url", `url=http://127.0.0.1:${this.mcpPort}/mcp`,
-      "--mcp.extra-headers", "Authorization: env:MCP_BEARER",
       "--health.listen-addr", `127.0.0.1:${HEALTH_PORT}`,
       "--log.format", "struct-text",
+      ...(this.authOrigin ? ['--mcp.oauth-trusted-origin', this.authOrigin, '--harpoon.hosts-include-regex', '^' + new URL(this.authOrigin).hostname.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '$'] : []),
+      '--harpoon.allow-plaintext-http',
     ];
     const child = spawn(this.binPath, args, {
-      env: { ...process.env, CONTROL_PLANE_API_KEY: cfg.apiKey, MCP_BEARER: `Bearer ${cfg.token}` },
+      env: { ...process.env, CONTROL_PLANE_API_KEY: cfg.apiKey },
       windowsHide: true,
       stdio: ["ignore", "pipe", "pipe"],
     });
@@ -202,7 +197,7 @@ export class TunnelManager {
 
   /** Called after the vault is unlocked. */
   autoStart() {
-    if (this.vault.d.tunnel?.autoStart && this.installed) {
+    if (this.config?.autoStart && this.installed) {
       try {
         this.start();
       } catch (e) {

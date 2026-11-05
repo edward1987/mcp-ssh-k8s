@@ -1,0 +1,372 @@
+{
+    "reviewedOn":  "2026-11-01",
+    "scanner":  "Trivy 0.76.1",
+    "image":  "mcp-ssh-k8s:local",
+    "imageId":  "sha256:a97b751ba1e20f2c2d2e8e5dbde457d77eb296d9ee992e197d2c91af2cc82250",
+    "critical":  0,
+    "high":  0,
+    "medium":  25,
+    "low":  9,
+    "findings":  [
+                     {
+                         "component":  "mcp-ssh-k8s:local (debian 13.7)",
+                         "id":  "CVE-2026-102010",
+                         "package":  "gcc-14-base",
+                         "installedVersion":  "14.2.0-19",
+                         "fixedVersion":  null,
+                         "severity":  "MEDIUM",
+                         "status":  "affected",
+                         "source":  "https://avd.aquasec.com/nvd/cve-2026-102010"
+                     },
+                     {
+                         "component":  "mcp-ssh-k8s:local (debian 13.7)",
+                         "id":  "CVE-2026-95619",
+                         "package":  "gcc-14-base",
+                         "installedVersion":  "14.2.0-19",
+                         "fixedVersion":  null,
+                         "severity":  "MEDIUM",
+                         "status":  "affected",
+                         "source":  "https://avd.aquasec.com/nvd/cve-2026-95619"
+                     },
+                     {
+                         "component":  "mcp-ssh-k8s:local (debian 13.7)",
+                         "id":  "CVE-2026-42250",
+                         "package":  "libbz2-1.0",
+                         "installedVersion":  "1.0.8-6",
+                         "fixedVersion":  null,
+                         "severity":  "MEDIUM",
+                         "status":  "affected",
+                         "source":  "https://avd.aquasec.com/nvd/cve-2026-42250"
+                     },
+                     {
+                         "component":  "mcp-ssh-k8s:local (debian 13.7)",
+                         "id":  "CVE-2026-18374",
+                         "package":  "libc6",
+                         "installedVersion":  "2.41-12+deb13u4",
+                         "fixedVersion":  null,
+                         "severity":  "MEDIUM",
+                         "status":  "affected",
+                         "source":  "https://avd.aquasec.com/nvd/cve-2026-18374"
+                     },
+                     {
+                         "component":  "mcp-ssh-k8s:local (debian 13.7)",
+                         "id":  "CVE-2026-19499",
+                         "package":  "libc6",
+                         "installedVersion":  "2.41-12+deb13u4",
+                         "fixedVersion":  null,
+                         "severity":  "MEDIUM",
+                         "status":  "affected",
+                         "source":  "https://avd.aquasec.com/nvd/cve-2026-19499"
+                     },
+                     {
+                         "component":  "mcp-ssh-k8s:local (debian 13.7)",
+                         "id":  "CVE-2026-19542",
+                         "package":  "libc6",
+                         "installedVersion":  "2.41-12+deb13u4",
+                         "fixedVersion":  null,
+                         "severity":  "MEDIUM",
+                         "status":  "affected",
+                         "source":  "https://avd.aquasec.com/nvd/cve-2026-19542"
+                     },
+                     {
+                         "component":  "mcp-ssh-k8s:local (debian 13.7)",
+                         "id":  "CVE-2026-5435",
+                         "package":  "libc6",
+                         "installedVersion":  "2.41-12+deb13u4",
+                         "fixedVersion":  null,
+                         "severity":  "MEDIUM",
+                         "status":  "affected",
+                         "source":  "https://avd.aquasec.com/nvd/cve-2026-5435"
+                     },
+                     {
+                         "component":  "mcp-ssh-k8s:local (debian 13.7)",
+                         "id":  "CVE-2026-6238",
+                         "package":  "libc6",
+                         "installedVersion":  "2.41-12+deb13u4",
+                         "fixedVersion":  null,
+                         "severity":  "MEDIUM",
+                         "status":  "affected",
+                         "source":  "https://avd.aquasec.com/nvd/cve-2026-6238"
+                     },
+                     {
+                         "component":  "mcp-ssh-k8s:local (debian 13.7)",
+                         "id":  "CVE-2026-6368",
+                         "package":  "libc6",
+                         "installedVersion":  "2.41-12+deb13u4",
+                         "fixedVersion":  null,
+                         "severity":  "MEDIUM",
+                         "status":  "affected",
+                         "source":  "https://avd.aquasec.com/nvd/cve-2026-6368"
+                     },
+                     {
+                         "component":  "mcp-ssh-k8s:local (debian 13.7)",
+                         "id":  "CVE-2026-6791",
+                         "package":  "libc6",
+                         "installedVersion":  "2.41-12+deb13u4",
+                         "fixedVersion":  null,
+                         "severity":  "MEDIUM",
+                         "status":  "affected",
+                         "source":  "https://avd.aquasec.com/nvd/cve-2026-6791"
+                     },
+                     {
+                         "component":  "mcp-ssh-k8s:local (debian 13.7)",
+                         "id":  "CVE-2026-77117",
+                         "package":  "libc6",
+                         "installedVersion":  "2.41-12+deb13u4",
+                         "fixedVersion":  null,
+                         "severity":  "MEDIUM",
+                         "status":  "affected",
+                         "source":  "https://avd.aquasec.com/nvd/cve-2026-77117"
+                     },
+                     {
+                         "component":  "mcp-ssh-k8s:local (debian 13.7)",
+                         "id":  "CVE-2026-80489",
+                         "package":  "libc6",
+                         "installedVersion":  "2.41-12+deb13u4",
+                         "fixedVersion":  null,
+                         "severity":  "MEDIUM",
+                         "status":  "affected",
+                         "source":  "https://avd.aquasec.com/nvd/cve-2026-80489"
+                     },
+                     {
+                         "component":  "mcp-ssh-k8s:local (debian 13.7)",
+                         "id":  "CVE-2026-84243",
+                         "package":  "libc6",
+                         "installedVersion":  "2.41-12+deb13u4",
+                         "fixedVersion":  null,
+                         "severity":  "MEDIUM",
+                         "status":  "affected",
+                         "source":  "https://avd.aquasec.com/nvd/cve-2026-84243"
+                     },
+                     {
+                         "component":  "mcp-ssh-k8s:local (debian 13.7)",
+                         "id":  "CVE-2026-8674",
+                         "package":  "libc6",
+                         "installedVersion":  "2.41-12+deb13u4",
+                         "fixedVersion":  null,
+                         "severity":  "MEDIUM",
+                         "status":  "affected",
+                         "source":  "https://avd.aquasec.com/nvd/cve-2026-8674"
+                     },
+                     {
+                         "component":  "mcp-ssh-k8s:local (debian 13.7)",
+                         "id":  "CVE-2026-86805",
+                         "package":  "libc6",
+                         "installedVersion":  "2.41-12+deb13u4",
+                         "fixedVersion":  null,
+                         "severity":  "MEDIUM",
+                         "status":  "affected",
+                         "source":  "https://avd.aquasec.com/nvd/cve-2026-86805"
+                     },
+                     {
+                         "component":  "mcp-ssh-k8s:local (debian 13.7)",
+                         "id":  "CVE-2026-89092",
+                         "package":  "libc6",
+                         "installedVersion":  "2.41-12+deb13u4",
+                         "fixedVersion":  null,
+                         "severity":  "MEDIUM",
+                         "status":  "affected",
+                         "source":  "https://avd.aquasec.com/nvd/cve-2026-89092"
+                     },
+                     {
+                         "component":  "mcp-ssh-k8s:local (debian 13.7)",
+                         "id":  "CVE-2026-95818",
+                         "package":  "libc6",
+                         "installedVersion":  "2.41-12+deb13u4",
+                         "fixedVersion":  null,
+                         "severity":  "MEDIUM",
+                         "status":  "affected",
+                         "source":  "https://avd.aquasec.com/nvd/cve-2026-95818"
+                     },
+                     {
+                         "component":  "mcp-ssh-k8s:local (debian 13.7)",
+                         "id":  "CVE-2010-4756",
+                         "package":  "libc6",
+                         "installedVersion":  "2.41-12+deb13u4",
+                         "fixedVersion":  null,
+                         "severity":  "LOW",
+                         "status":  "affected",
+                         "source":  "https://avd.aquasec.com/nvd/cve-2010-4756"
+                     },
+                     {
+                         "component":  "mcp-ssh-k8s:local (debian 13.7)",
+                         "id":  "CVE-2018-20796",
+                         "package":  "libc6",
+                         "installedVersion":  "2.41-12+deb13u4",
+                         "fixedVersion":  null,
+                         "severity":  "LOW",
+                         "status":  "affected",
+                         "source":  "https://avd.aquasec.com/nvd/cve-2018-20796"
+                     },
+                     {
+                         "component":  "mcp-ssh-k8s:local (debian 13.7)",
+                         "id":  "CVE-2019-1010022",
+                         "package":  "libc6",
+                         "installedVersion":  "2.41-12+deb13u4",
+                         "fixedVersion":  null,
+                         "severity":  "LOW",
+                         "status":  "affected",
+                         "source":  "https://avd.aquasec.com/nvd/cve-2019-1010022"
+                     },
+                     {
+                         "component":  "mcp-ssh-k8s:local (debian 13.7)",
+                         "id":  "CVE-2019-1010023",
+                         "package":  "libc6",
+                         "installedVersion":  "2.41-12+deb13u4",
+                         "fixedVersion":  null,
+                         "severity":  "LOW",
+                         "status":  "affected",
+                         "source":  "https://avd.aquasec.com/nvd/cve-2019-1010023"
+                     },
+                     {
+                         "component":  "mcp-ssh-k8s:local (debian 13.7)",
+                         "id":  "CVE-2019-1010024",
+                         "package":  "libc6",
+                         "installedVersion":  "2.41-12+deb13u4",
+                         "fixedVersion":  null,
+                         "severity":  "LOW",
+                         "status":  "affected",
+                         "source":  "https://avd.aquasec.com/nvd/cve-2019-1010024"
+                     },
+                     {
+                         "component":  "mcp-ssh-k8s:local (debian 13.7)",
+                         "id":  "CVE-2019-1010025",
+                         "package":  "libc6",
+                         "installedVersion":  "2.41-12+deb13u4",
+                         "fixedVersion":  null,
+                         "severity":  "LOW",
+                         "status":  "affected",
+                         "source":  "https://avd.aquasec.com/nvd/cve-2019-1010025"
+                     },
+                     {
+                         "component":  "mcp-ssh-k8s:local (debian 13.7)",
+                         "id":  "CVE-2019-9192",
+                         "package":  "libc6",
+                         "installedVersion":  "2.41-12+deb13u4",
+                         "fixedVersion":  null,
+                         "severity":  "LOW",
+                         "status":  "affected",
+                         "source":  "https://avd.aquasec.com/nvd/cve-2019-9192"
+                     },
+                     {
+                         "component":  "mcp-ssh-k8s:local (debian 13.7)",
+                         "id":  "CVE-2026-97399",
+                         "package":  "libc6",
+                         "installedVersion":  "2.41-12+deb13u4",
+                         "fixedVersion":  null,
+                         "severity":  "LOW",
+                         "status":  "affected",
+                         "source":  "https://avd.aquasec.com/nvd/cve-2026-97399"
+                     },
+                     {
+                         "component":  "mcp-ssh-k8s:local (debian 13.7)",
+                         "id":  "CVE-2026-102010",
+                         "package":  "libgcc-s1",
+                         "installedVersion":  "14.2.0-19",
+                         "fixedVersion":  null,
+                         "severity":  "MEDIUM",
+                         "status":  "affected",
+                         "source":  "https://avd.aquasec.com/nvd/cve-2026-102010"
+                     },
+                     {
+                         "component":  "mcp-ssh-k8s:local (debian 13.7)",
+                         "id":  "CVE-2026-95619",
+                         "package":  "libgcc-s1",
+                         "installedVersion":  "14.2.0-19",
+                         "fixedVersion":  null,
+                         "severity":  "MEDIUM",
+                         "status":  "affected",
+                         "source":  "https://avd.aquasec.com/nvd/cve-2026-95619"
+                     },
+                     {
+                         "component":  "mcp-ssh-k8s:local (debian 13.7)",
+                         "id":  "CVE-2026-102010",
+                         "package":  "libgomp1",
+                         "installedVersion":  "14.2.0-19",
+                         "fixedVersion":  null,
+                         "severity":  "MEDIUM",
+                         "status":  "affected",
+                         "source":  "https://avd.aquasec.com/nvd/cve-2026-102010"
+                     },
+                     {
+                         "component":  "mcp-ssh-k8s:local (debian 13.7)",
+                         "id":  "CVE-2026-95619",
+                         "package":  "libgomp1",
+                         "installedVersion":  "14.2.0-19",
+                         "fixedVersion":  null,
+                         "severity":  "MEDIUM",
+                         "status":  "affected",
+                         "source":  "https://avd.aquasec.com/nvd/cve-2026-95619"
+                     },
+                     {
+                         "component":  "mcp-ssh-k8s:local (debian 13.7)",
+                         "id":  "CVE-2026-102010",
+                         "package":  "libstdc++6",
+                         "installedVersion":  "14.2.0-19",
+                         "fixedVersion":  null,
+                         "severity":  "MEDIUM",
+                         "status":  "affected",
+                         "source":  "https://avd.aquasec.com/nvd/cve-2026-102010"
+                     },
+                     {
+                         "component":  "mcp-ssh-k8s:local (debian 13.7)",
+                         "id":  "CVE-2026-95619",
+                         "package":  "libstdc++6",
+                         "installedVersion":  "14.2.0-19",
+                         "fixedVersion":  null,
+                         "severity":  "MEDIUM",
+                         "status":  "affected",
+                         "source":  "https://avd.aquasec.com/nvd/cve-2026-95619"
+                     },
+                     {
+                         "component":  "mcp-ssh-k8s:local (debian 13.7)",
+                         "id":  "CVE-2021-4217",
+                         "package":  "unzip",
+                         "installedVersion":  "6.0-29+deb13u1",
+                         "fixedVersion":  null,
+                         "severity":  "LOW",
+                         "status":  "affected",
+                         "source":  "https://avd.aquasec.com/nvd/cve-2021-4217"
+                     },
+                     {
+                         "component":  "mcp-ssh-k8s:local (debian 13.7)",
+                         "id":  "CVE-2026-27171",
+                         "package":  "zlib1g",
+                         "installedVersion":  "1:1.3.dfsg+really1.3.1-1+b1",
+                         "fixedVersion":  null,
+                         "severity":  "MEDIUM",
+                         "status":  "affected",
+                         "source":  "https://avd.aquasec.com/nvd/cve-2026-27171"
+                     },
+                     {
+                         "component":  "mcp-ssh-k8s:local (debian 13.7)",
+                         "id":  "CVE-2026-85091",
+                         "package":  "zlib1g",
+                         "installedVersion":  "1:1.3.dfsg+really1.3.1-1+b1",
+                         "fixedVersion":  null,
+                         "severity":  "MEDIUM",
+                         "status":  "affected",
+                         "source":  "https://avd.aquasec.com/nvd/cve-2026-85091"
+                     },
+                     {
+                         "component":  "Node.js",
+                         "id":  null,
+                         "package":  null,
+                         "installedVersion":  null,
+                         "fixedVersion":  null,
+                         "severity":  null,
+                         "status":  null,
+                         "source":  null
+                     },
+                     {
+                         "component":  "usr/local/bin/kubectl",
+                         "id":  null,
+                         "package":  null,
+                         "installedVersion":  null,
+                         "fixedVersion":  null,
+                         "severity":  null,
+                         "status":  null,
+                         "source":  null
+                     }
+                 ]
+}

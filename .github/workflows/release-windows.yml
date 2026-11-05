@@ -11,13 +11,14 @@ permissions:
 jobs:
   build:
     runs-on: windows-2022
+    environment: release
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: '24.22.1'
+          node-version: '24.22.2'
           cache: npm
       - name: Check release tag
         if: startsWith(github.ref, 'refs/tags/')
@@ -36,17 +37,19 @@ jobs:
           }
       - name: Build and test installer
         shell: powershell
+        env:
+          MCP_SSH_INTEGRITY_SIGNING_KEY: ${{ secrets.MCP_SSH_INTEGRITY_SIGNING_KEY }}
         run: npm run release:windows
       - name: Verify install, service, upgrade and uninstall
         shell: powershell
         run: ./scripts/windows/test-installer.ps1
       - name: Upload diagnostic logs
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: installer-diagnostics
           path: .release-cache/*.log
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: windows-installer
           path: |

@@ -1,0 +1,46 @@
+[Unit]
+Description=MCP SSH and Kubernetes gateway
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=mcp-ssh
+Group=mcp-ssh
+WorkingDirectory=/opt/mcp-ssh
+Environment=NODE_ENV=production
+Environment=MCP_SSH_DATA=/var/lib/mcp-ssh
+Environment=TMPDIR=/run/mcp-ssh
+Environment=HOME=/var/lib/mcp-ssh
+EnvironmentFile=-/etc/mcp-ssh/environment
+ExecStart=/usr/bin/node /opt/mcp-ssh/scripts/start.mjs
+Restart=on-failure
+RestartPreventExitStatus=78
+RestartSec=5
+TimeoutStopSec=15
+UMask=0077
+StateDirectory=mcp-ssh
+StateDirectoryMode=0700
+RuntimeDirectory=mcp-ssh
+RuntimeDirectoryMode=0700
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+LimitCORE=0
+TasksMax=128
+MemoryMax=768M
+
+[Install]
+WantedBy=multi-user.target

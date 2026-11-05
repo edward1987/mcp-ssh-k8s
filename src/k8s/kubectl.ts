@@ -6,13 +6,17 @@ import { parse } from "yaml";
 import type { ExecResult } from "../ssh/exec.js";
 import type { Mode } from "../vault/store.js";
 
+const emergencyStops = new Set<() => void>();
+/** Best-effort synchronous cleanup before an integrity-triggered process exit. */
+export function stopKubectlExecutions() { for (const stop of [...emergencyStops]) { try { stop(); } catch {} } }
+
 // ---- kubeconfig upload ----
 
 export interface KubeconfigInfo {
   contexts: string[];
   currentContext?: string;
   servers: string[];
-  /** Credential helpers the kubeconfig will run on this PC (EKS/GKE/AKS style); shown so the operator knows. */
+  /** Always empty: executable credential helpers are forbidden on this multi-user server. */
   execCommands: string[];
 }
 
@@ -30,9 +34,16 @@ export function inspectKubeconfig(text: string): KubeconfigInfo {
 
   // Only the file contents are stored, so paths to certs/keys on the original machine would break.
   const refs: string[] = [];
-  for (const c of doc.clusters) if (c?.cluster?.["certificate-authority"]) refs.push(`certificate-authority (${c.name})`);
+  for (const c of doc.clusters) {
+    if (c?.cluster?.["certificate-authority"]) refs.push(`certificate-authority (${c.name})`);
+    const endpoint = new URL(String(c?.cluster?.server ?? ""));
+    if (endpoint.protocol !== "https:" || endpoint.username || endpoint.password || endpoint.hash || endpoint.search) throw new Error("Kubernetes API servers must use HTTPS without URL credentials");
+    if (c?.cluster?.["insecure-skip-tls-verify"]) throw new Error("Kubernetes TLS certificate verification cannot be disabled");
+    if (c?.cluster?.["proxy-url"]) throw new Error("Kubeconfig proxy-url is not allowed on this server");
+  }
   for (const u of doc.users) {
-    for (const f of ["client-certificate", "client-key", "tokenFile"]) if (u?.user?.[f]) refs.push(`${f} (${u.name})`);
+    if (u?.user?.exec || u?.user?.["auth-provider"]) throw new Error("Executable credential helpers (exec/auth-provider) are not allowed; use an embedded short-lived token or client certificate");
+    for (const f of ["client-certificate", "client-key", "tokenFile", "token-file"]) if (u?.user?.[f]) refs.push(`${f} (${u.name})`);
   }
   if (refs.length)
     throw new Error(`kubeconfig references local files instead of embedding them: ${refs.join(", ")}. Export a self-contained one with: kubectl config view --raw --flatten`);
@@ -41,7 +52,7 @@ export function inspectKubeconfig(text: string): KubeconfigInfo {
     contexts: doc.contexts.map((c: any) => String(c.name)),
     currentContext: doc["current-context"] ? String(doc["current-context"]) : undefined,
     servers: doc.clusters.map((c: any) => String(c?.cluster?.server ?? "")).filter(Boolean),
-    execCommands: [...new Set<string>(doc.users.map((u: any) => u?.user?.exec?.command).filter(Boolean).map(String))],
+    execCommands: [],
   };
 }
 
@@ -91,10 +102,11 @@ const IDENTITY_LONG = new Set([
   "as", "as-group", "as-uid", "cluster", "user", "context", "tls-server-name", "proxy-url", "cache-dir", "kuberc",
 ]);
 // Flags that read local files on this PC.
-const LOCAL_FILE_LONG = new Set(["from-file", "from-env-file", "patch-file", "kustomize"]);
+const LOCAL_FILE_LONG = new Set(["from-file", "from-env-file", "patch-file", "kustomize", "output-directory", "profile", "profile-output"]);
 const READ_ONLY_BLOCKED_LONG = new Set(["raw", "watch", "watch-only", "follow", "filename", "kustomize"]);
 
-const flagName = (a: string) => (a.startsWith("--") ? a.slice(2).split("=")[0] : undefined);
+// kubectl's pflag normalizer accepts underscores as hyphens.
+const flagName = (a: string) => (a.startsWith("--") ? a.slice(2).split("=")[0].replace(/_/g, "-") : undefined);
 
 export interface Parsed {
   verb: string;
@@ -105,10 +117,13 @@ export interface Parsed {
 export function checkKubectl(args: string[], mode: Mode, hasStdin = false): { ok: true; parsed: Parsed } | { ok: false; reason: string } {
   const no = (reason: string) => ({ ok: false as const, reason });
   if (!args.length) return no("empty command");
+  if (args.some(a => a.includes("\0"))) return no("NUL bytes are not allowed in arguments");
   const verb = args[0];
   if (verb.startsWith("-")) return no("start with a kubectl subcommand (get, describe, logs, ...); put flags after it");
   if (NEVER_VERBS.has(verb)) return no(`kubectl ${verb} is not available through MCP`);
   if (!KNOWN_VERBS.has(verb)) return no(`unknown kubectl subcommand: ${verb}`);
+  // dump writes local files and collects broad cluster state, including pod logs.
+  if (verb === "cluster-info" && args.includes("dump")) return no("cluster-info dump is not available through MCP");
 
   const dd = args.indexOf("--");
   const head = dd < 0 ? args : args.slice(0, dd);
@@ -116,16 +131,19 @@ export function checkKubectl(args: string[], mode: Mode, hasStdin = false): { ok
   for (let i = 0; i < head.length; i++) {
     const a = head[i];
     const long = flagName(a);
+    // A boolean bundle like -Ashttps://evil hides the global -s server override.
+    // Only flags known to consume the entire attached value may have a short suffix.
+    if (a.startsWith("-") && !a.startsWith("--") && a.length > 2 && !/^-[nolcvfsk]/.test(a)) return no("combined short flags are not allowed; pass each flag separately");
     if (long && IDENTITY_LONG.has(long)) return no(`--${long} is managed by the vault and cannot be set`);
     if (/^-s/.test(a) && !a.startsWith("--")) return no("-s (server override) is not allowed");
-    if (long && LOCAL_FILE_LONG.has(long)) return no(`--${long} reads local files and is not allowed`);
+    if (long && LOCAL_FILE_LONG.has(long)) return no(`--${long} accesses local files and is not allowed`);
     if (/^-k/.test(a) && !a.startsWith("--")) return no("-k (kustomize directory) is not allowed");
     if (/(go-template-file|jsonpath-file|custom-columns-file)/.test(a)) return no("template files on this PC are not allowed");
-    // -f is allowed only for stdin ("-") or a URL, never a path on this PC
+    // Accept only explicit stdin: URL lists can smuggle local files and cause SSRF.
     const isF = a === "-f" || long === "filename" || (!a.startsWith("--") && /^-f./.test(a));
     if (isF) {
       const v = a === "-f" || (long === "filename" && !a.includes("=")) ? head[i + 1] : a.includes("=") ? a.slice(a.indexOf("=") + 1) : a.slice(2);
-      if (v !== "-" && !/^https?:\/\//.test(v ?? "")) return no('-f/--filename only accepts "-" (use the manifest parameter) or an http(s) URL');
+      if (v !== "-") return no('-f/--filename only accepts "-" (use the manifest parameter)');
       if (v === "-" && !hasStdin) return no('-f - needs the "manifest" parameter');
     }
   }
@@ -163,9 +181,13 @@ export function withDefaults(p: Parsed, opts: { context?: string; namespace?: st
 // ---- execution ----
 
 export function runKubectl(kubeconfig: string, args: string[], o: { stdin?: string; timeoutSec: number; maxBytes: number }): Promise<ExecResult> {
+  // Revalidate stored configs too, including pre-upgrade imports and shared snapshots.
+  inspectKubeconfig(kubeconfig);
+  if (args.some(a => a.includes("\0"))) throw new Error("NUL bytes are not allowed in arguments");
   const dir = mkdtempSync(join(tmpdir(), "mcp-k8s-"));
   const cfgPath = join(dir, "config");
-  const cleanup = () => rmSync(dir, { recursive: true, force: true });
+  let emergencyStop: (() => void) | undefined;
+  const cleanup = () => { if (emergencyStop) emergencyStops.delete(emergencyStop); rmSync(dir, { recursive: true, force: true }); };
   return new Promise((resolve, reject) => {
     let out = "", err = "", truncated = false, timedOut = false;
     try {
@@ -174,14 +196,19 @@ export function runKubectl(kubeconfig: string, args: string[], o: { stdin?: stri
       cleanup();
       return reject(e);
     }
-    const child = spawn(process.env.KUBECTL_PATH || "kubectl", args, {
-      env: { ...process.env, KUBECONFIG: cfgPath, KUBECACHEDIR: join(dir, "cache") },
-      stdio: [o.stdin === undefined ? "ignore" : "pipe", "pipe", "pipe"],
-      windowsHide: true,
-    });
+    let child: ReturnType<typeof spawn>;
+    try {
+      child = spawn(process.env.KUBECTL_PATH || "kubectl", ["--cache-dir", join(dir, "cache"), ...args], {
+        env: kubectlEnvironment(dir, cfgPath),
+        stdio: [o.stdin === undefined ? "ignore" : "pipe", "pipe", "pipe"],
+        windowsHide: true,
+      });
+    } catch (error) { cleanup(); reject(error); return; }
+    emergencyStop = () => { try { child.kill('SIGKILL'); } finally { cleanup(); } };
+    emergencyStops.add(emergencyStop);
     const timer = setTimeout(() => {
       timedOut = true;
-      child.kill();
+      child.kill("SIGKILL");
     }, o.timeoutSec * 1000);
     const add = (cur: string, chunk: Buffer) => {
       if (cur.length >= o.maxBytes) {
@@ -213,4 +240,13 @@ export function runKubectl(kubeconfig: string, args: string[], o: { stdin?: stri
       });
     });
   });
+}
+
+/** Do not pass the application's environment secrets or host kube preferences to subprocesses. */
+export function kubectlEnvironment(dir: string, cfgPath: string): NodeJS.ProcessEnv {
+  return {
+    PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, WINDIR: process.env.WINDIR,
+    HOME: dir, USERPROFILE: dir, TMPDIR: dir, TMP: dir, TEMP: dir,
+    KUBECONFIG: cfgPath, KUBECTL_KUBERC: "false", KUBERC: "off", LANG: "C.UTF-8",
+  };
 }

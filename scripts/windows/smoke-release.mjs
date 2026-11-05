@@ -24,7 +24,7 @@ const serviceName = `McpSshK8sSmoke-${process.pid}`;
 const url = `http://127.0.0.1:${adminPort}`;
 const password = 'release smoke test password';
 const elevated = spawnSync('powershell.exe', ['-NoProfile', '-Command', '[Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)'], { encoding: 'utf8', windowsHide: true }).stdout.trim() === 'True';
-let running = false, cookie, csrf;
+let running = false, cookie, csrf, recoveryCodes;
 const hash = (file) => createHash('sha256').update(readFileSync(file)).digest('hex');
 function powershell(script, args = [], allowFailure = false) {
   const r = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script, ...args], { encoding: 'utf8', windowsHide: true, timeout: 60000, ...(script.endsWith('launch.ps1') ? { stdio: 'ignore' } : {}) });
@@ -70,17 +70,31 @@ try {
   console.log('Configured temporary data folder.');
   start();
   console.log('Packaged app started.');
-  assert.deepEqual(await request('/api/status'), { exists: false, unlocked: false });
+  assert.equal((await fetch(url + '/api/status')).status, 401);
   assert.match(await (await fetch(url)).text(), /MCP SSH/);
-  csrf = (await request('/api/setup', 'POST', { password })).csrf;
-  // Windows 8.3 names and full names can identify the same directory. Compare file IDs.
+  const bootstrap = await fetch(url + '/identity/bootstrap', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ master: password, name: 'smoke-admin' }), redirect: 'manual' });
+  assert.equal(bootstrap.status, 302);
+  const activationUrl = new URL(bootstrap.headers.get('location'), url);
+  const activationPage = await (await fetch(activationUrl)).text();
+  const secret = /<code>([^<]+)<\/code>/.exec(activationPage)[1];
+  const { TOTP, Secret } = packagedRequire('otpauth');
+  const activated = await fetch(url + '/identity/activate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token: activationUrl.searchParams.get('token'), password: 'account password distinct', otp: new TOTP({ secret: Secret.fromBase32(secret) }).generate() }) });
+  assert.equal(activated.status, 200);
+  recoveryCodes = /<pre>([^<]+)<\/pre>/.exec(await activated.text())[1].split('\n');
+  async function login(code) {
+    const response = await fetch(url + '/identity/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: 'smoke-admin', password: 'account password distinct', otp: code }), redirect: 'manual' });
+    assert.equal(response.status, 302); cookie = response.headers.get('set-cookie').split(';')[0];
+  }
+  await login(recoveryCodes[0]);
+  const identityCookie = cookie;
+  csrf = (await request('/api/migrate', 'POST', { oldPassword: password, password })).csrf;
+  cookie = identityCookie + '; ' + cookie;
   const actualDirectory = statSync((await request('/api/storage')).dataDir, { bigint: true });
   const expectedDirectory = statSync(data, { bigint: true });
   assert.deepEqual([actualDirectory.dev, actualDirectory.ino], [expectedDirectory.dev, expectedDirectory.ino]);
-  const token = await request('/api/tokens', 'POST', { name: 'installer-smoke' });
-  assert(token.token.startsWith('mcp_'));
+  assert.equal((await fetch(url + '/api/tokens', { method: 'POST', headers: { Cookie: cookie } })).status, 410);
   const vaultPath = join(data, 'vault.json');
-  assert(!readFileSync(vaultPath, 'utf8').includes(token.token));
+  assert(!readFileSync(vaultPath, 'utf8').includes('account password distinct'));
   writeFileSync(join(data, 'audit.jsonl'), '{"ts":"2026-01-01","action":"smoke-test"}\n');
   stop();
   const beforeVault = hash(vaultPath), beforeAudit = hash(join(data, 'audit.jsonl'));
@@ -92,16 +106,20 @@ try {
   configure('Configure');
   cookie = csrf = undefined;
   start();
-  assert.deepEqual(await request('/api/status'), { exists: true, unlocked: false });
+  assert.equal((await fetch(url + '/api/status')).status, 401);
+  await login(recoveryCodes[1]);
+  const restartedIdentity = cookie;
+  assert.equal((await request('/api/status')).unlocked, false);
   assert.equal(hash(vaultPath), beforeVault, 'Startup must not modify an existing vault');
   csrf = (await request('/api/unlock', 'POST', { password })).csrf;
-  assert.equal((await request('/api/tokens'))[0].name, 'installer-smoke');
+  cookie = restartedIdentity + '; ' + cookie;
+  assert.deepEqual(await request('/api/tokens'), []);
   stop();
   if (elevated) {
     try {
       configure('Configure', data, 1);
-      assert.equal((await request('/api/status')).exists, true);
-      assert.equal((await request('/api/status')).unlocked, false);
+      assert.equal((await fetch(url + '/identity/me')).status, 200);
+      assert.equal((await fetch(url + '/api/status')).status, 401);
       const service = spawnSync('powershell.exe', ['-NoProfile', '-Command', `Get-CimInstance Win32_Service -Filter "Name='${serviceName}'" | Select-Object State,StartMode,StartName | ConvertTo-Json`], { encoding: 'utf8', windowsHide: true });
       const info = JSON.parse(service.stdout);
       assert.equal(info.State, 'Running');
@@ -121,7 +139,7 @@ try {
   const status = spawnSync(join(stage, 'mcp-ssh-service.exe'), ['status'], { encoding: 'utf8', windowsHide: true });
   assert.match(status.stdout, /NonExistent|non-existent|not installed/i, status.stderr);
   assert.match(readFileSync(join(stage, 'mcp-ssh-service.xml'), 'utf8'), /<user>LocalService<\/user>/);
-  console.log('Windows release smoke passed: packaged SSH, manual launch/stop, existing vault, original password/tokens, backup, locked restart and WinSW config.');
+  console.log('Windows release smoke passed: packaged SSH, manual launch/stop, existing vault, original master password, MFA and individual identity, backup, locked restart and WinSW config.');
 } finally {
   if (running) stop();
   for (const name of ['install.json', 'mcp-ssh-service.xml', 'mcp-ssh-service.wrapper.log']) rmSync(join(stage, name), { force: true });

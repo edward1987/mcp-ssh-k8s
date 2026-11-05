@@ -1,0 +1,56 @@
+name: Cross-platform and security checks
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: security-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  test:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24.22.2'
+          cache: npm
+      - run: npm ci --ignore-scripts --no-fund
+      - run: npm audit --audit-level=moderate
+      - run: npm run build
+      - run: npm test
+      - if: runner.os == 'Linux'
+        run: npx playwright install --with-deps chromium
+      - run: npm run test:browser
+  container:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24.22.2'
+      # PRs use ephemeral signing material, never the protected release key.
+      - run: node scripts/build-container.mjs --tag mcp-ssh-k8s:local --test-key --output release/container/test-build.json
+      - run: npm run test:container
+      - name: Install verified kind CLI
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/mcp-ssh-tools"
+          cd "$RUNNER_TEMP/mcp-ssh-tools"
+          curl -fsSLo kind https://github.com/kubernetes-sigs/kind/releases/download/v0.33.0/kind-linux-amd64
+          curl -fsSLo kind.sha256sum https://github.com/kubernetes-sigs/kind/releases/download/v0.33.0/kind-linux-amd64.sha256sum
+          echo "$(cut -d ' ' -f1 kind.sha256sum)  kind" | sha256sum -c -
+          chmod +x kind
+          echo "$RUNNER_TEMP/mcp-ssh-tools" >> "$GITHUB_PATH"
+      - run: npm run test:k8s
+      - name: Scan image and source (fail on HIGH/CRITICAL, including unfixed CVEs)
+        shell: bash
+        run: |
+          scanner=aquasec/trivy:0.76.1@sha256:790fd66d1697395d8693d1acaa1ea702406a20f109b6fc7bac8db623eca6c06c
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock "$scanner" image --scanners vuln --severity HIGH,CRITICAL --exit-code 1 mcp-ssh-k8s:local
+          docker run --rm -v "$PWD:/src:ro" "$scanner" fs --scanners vuln,secret,misconfig --severity HIGH,CRITICAL --exit-code 1 --skip-dirs .git /src

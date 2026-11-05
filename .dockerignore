@@ -1,0 +1,26 @@
+# Allowlist: never send local vaults, backups, credentials or build caches to Docker.
+**
+!package.json
+!package-lock.json
+!tsconfig.json
+!LICENSE
+!Dockerfile
+!src/
+!src/**
+!tests/
+!tests/**
+!web/
+!web/**
+!scripts/
+!scripts/bootstrap.mjs
+!scripts/healthcheck.mjs
+!scripts/termius_dump.py
+!scripts/start.mjs
+!scripts/integrity.mjs
+!scripts/integrity.d.mts
+!scripts/render-deployment.mjs
+!compose.yaml
+!deploy/
+!deploy/k8s/
+!deploy/k8s/*.yaml
+!deploy/k8s/integrity-public-key.txt

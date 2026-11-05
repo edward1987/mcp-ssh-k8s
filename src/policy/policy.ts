@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import { identityContext } from "../auth/context.js";
+import { splitArgs } from "../k8s/kubectl.js";
 
 export const DEFAULT_ALLOWLIST = [
   "ls", "cat", "head", "tail", "grep", "df", "du", "free", "uptime", "whoami", "id", "hostname",
@@ -11,14 +13,23 @@ export const DEFAULT_ALLOWLIST = [
 // Anything that could chain, redirect, substitute or smuggle a second command.
 const FORBIDDEN = /[;&|<>`$(){}\\\n\r]/;
 // Flags that turn otherwise-harmless allowlisted commands into writers/executors.
-const DANGEROUS_FLAGS = /(^|\s)(-exec|-delete|--output|-o\s|--follow-up|--vacuum)/;
+const DANGEROUS_FLAGS = /^(-exec|-delete|--output(?:=|$)|-o$|--follow-up|--vacuum)/;
 
 export function checkReadOnly(command: string, allowlist: string[]): { ok: true } | { ok: false; reason: string } {
   const cmd = command.trim();
   if (!cmd) return { ok: false, reason: "empty command" };
   if (FORBIDDEN.test(cmd)) return { ok: false, reason: "shell metacharacters are not allowed in read-only mode" };
-  if (DANGEROUS_FLAGS.test(cmd)) return { ok: false, reason: "flag not allowed in read-only mode" };
-  const tokens = cmd.split(/\s+/);
+  let tokens: string[];
+  try { tokens = splitArgs(cmd); } catch { return { ok: false, reason: "invalid quoting" }; }
+  if (tokens.some(t => DANGEROUS_FLAGS.test(t))) return { ok: false, reason: "flag not allowed in read-only mode" };
+  const no = () => ({ ok: false as const, reason: "mutating arguments are not allowed in read-only mode" });
+  // Several inspection commands also contain setters. Prefix matching alone is insufficient.
+  if (tokens[0] === "hostname" && tokens.slice(1).some(t => !/^(-[aAdfiIsvVy]|--(?:alias|all-fqdns|domain|fqdn|ip-address|all-ip-addresses|short|verbose|version|help))$/.test(t))) return no();
+  if (tokens[0] === "date" && tokens.slice(1).some(t => !t.startsWith("+") && !/^(-[uRIV]|--(?:utc|universal|rfc-email|iso-8601(?:=.*)?|rfc-3339=.*|version|help))$/.test(t))) return no();
+  if (tokens[0] === "uname" && tokens.slice(1).some(t => !/^(-[asnrvmpio]+|--(?:all|kernel-name|nodename|kernel-release|kernel-version|machine|processor|hardware-platform|operating-system|version|help))$/.test(t))) return no();
+  if (tokens[0] === "ip" && tokens[2] !== undefined && !(tokens[1] === "addr" ? ["show", "list"] : ["show", "list", "get"]).includes(tokens[2])) return no();
+  if (tokens[0] === "ss" && tokens.slice(1).some(t => /^--(?:kill|bpf|diag)(=|$)/.test(t) || /^-[^-]*[KDb]/.test(t))) return no();
+  if (tokens[0] === "journalctl" && tokens.slice(1).some(t => /^--(?:rotate|flush|sync|relinquish-var|smart-relinquish-var|setup-keys|update-catalog|vacuum|root|directory|image)/.test(t))) return no();
   const allowed = [...DEFAULT_ALLOWLIST, ...allowlist].some((entry) => {
     const e = entry.trim().split(/\s+/);
     return e.length <= tokens.length && e.every((t, i) => t === tokens[i]);
@@ -31,6 +42,10 @@ export interface Pending {
   host: string;
   command: string;
   client: string;
+  userId?: string;
+  clientId?: string;
+  approvers?: string[];
+  shareId?: string;
   created: number;
 }
 
@@ -53,7 +68,8 @@ export class Approvals {
         resolve(d);
       };
       const t = setTimeout(() => done("timeout"), timeoutSec * 1000);
-      this.items.set(id, { ...p, id, created: Date.now(), resolve: done });
+      const identity = identityContext.getStore();
+      this.items.set(id, { ...p, userId: identity?.userId, clientId: identity?.clientId, id, created: Date.now(), resolve: done });
     });
   }
 
@@ -63,6 +79,10 @@ export class Approvals {
     it.resolve(d);
     return true;
   }
+
+  denyShare(shareId: string) { for (const it of [...this.items.values()]) if (it.shareId === shareId) it.resolve("denied"); }
+
+  denyUser(userId: string) { for (const it of [...this.items.values()]) if (it.userId === userId) it.resolve("denied"); }
 
   denyAll() {
     for (const it of [...this.items.values()]) it.resolve("denied");

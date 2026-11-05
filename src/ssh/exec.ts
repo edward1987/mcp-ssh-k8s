@@ -13,6 +13,7 @@ export interface ExecResult {
 }
 
 function connectConfig(vault: Vault, host: Host): ConnectConfig {
+  const data = vault.d;
   const cfg: ConnectConfig = {
     host: host.hostname,
     port: host.port,
@@ -22,17 +23,17 @@ function connectConfig(vault: Vault, host: Host): ConnectConfig {
     // Trust-on-first-use: pin the fingerprint, refuse if it later changes.
     hostVerifier: (key: Buffer) => {
       const fp = "SHA256:" + createHash("sha256").update(key).digest("base64").replace(/=+$/, "");
-      const known = vault.d.knownHosts[host.id];
+      const known = data.knownHosts[host.id];
       if (!known) {
-        vault.d.knownHosts[host.id] = fp;
-        vault.save();
+        data.knownHosts[host.id] = fp;
+        try { if (vault.unlocked) vault.save(); } catch { return false; }
         return true;
       }
       return known === fp;
     },
   };
   if (host.auth === "key") {
-    const k = vault.d.keys.find((x) => x.id === host.keyId);
+    const k = data.keys.find((x) => x.id === host.keyId);
     if (!k) throw new Error(`key not found for host ${host.name}`);
     cfg.privateKey = k.privateKey;
     if (k.passphrase) cfg.passphrase = k.passphrase;
@@ -49,7 +50,7 @@ export function runSsh(vault: Vault, host: Host, command: string, timeoutSec = 3
     let out = "", err = "", truncated = false, timedOut = false;
     const timer = setTimeout(() => {
       timedOut = true;
-      conn.end();
+      conn.destroy();
     }, timeoutSec * 1000);
     const add = (cur: string, chunk: Buffer) => {
       if (cur.length >= max) {
@@ -87,7 +88,9 @@ export function runSsh(vault: Vault, host: Host, command: string, timeoutSec = 3
         reject(e);
       })
       .on("close", () => {
-        if (timedOut) resolve({ stdout: out, stderr: err, exitCode: null, truncated, timedOut });
+        clearTimeout(timer);
+        if (timedOut) resolve({ stdout: out.slice(0, max), stderr: err.slice(0, max), exitCode: null, truncated: truncated || out.length > max || err.length > max, timedOut });
+        else reject(new Error("SSH connection closed before command completed"));
       });
     try {
       conn.connect(connectConfig(vault, host));

@@ -1,3 +1,5 @@
+import type { IdentityStore } from "./auth/store.js";
+import { requireAccess } from "./auth/context.js";
 import type { Audit } from "./audit.js";
 import { checkReadOnly, type Approvals } from "./policy/policy.js";
 import type { HostMonitor } from "./health.js";
@@ -6,6 +8,11 @@ import { runSsh } from "./ssh/exec.js";
 import type { Cluster, Host, Vault } from "./vault/store.js";
 
 export interface Ctx {
+  integrity?: import('./integrity.js').IntegrityMonitor;
+  tls?: import("./tls/cloudflare.js").CloudflareTls;
+  registry?: import("./vault/registry.js").VaultRegistry;
+  shares?: import("./vault/shares.js").ShareBroker;
+  identities?: IdentityStore;
   vault: Vault;
   audit: Audit;
   approvals: Approvals;
@@ -15,13 +22,13 @@ export interface Ctx {
 
 export function findHost(vault: Vault, ref: string): Host {
   const h = vault.d.hosts.find((x) => x.id === ref || x.name.toLowerCase() === ref.toLowerCase());
-  if (!h) throw new Error(`unknown host "${ref}" (use list_hosts)`);
+  if (!h) throw new Error("Resource unavailable");
   return h;
 }
 
 export function findCluster(vault: Vault, ref: string): Cluster {
   const c = vault.d.clusters.find((x) => x.id === ref || x.name.toLowerCase() === ref.toLowerCase());
-  if (!c) throw new Error(`unknown cluster "${ref}" (use list_clusters)`);
+  if (!c) throw new Error("Resource unavailable");
   return c;
 }
 
@@ -30,8 +37,10 @@ export const shq = (s: string) => `'${s.replace(/'/g, `'\''`)}'`;
 /** Policy -> (approval) -> ssh -> audit. Returns text for the model. */
 export async function runCommand(ctx: Ctx, client: string, ref: string, command: string, timeoutSec = 30, action = "run_command") {
   const { vault, audit, approvals } = ctx;
-  vault.touch();
+  if (!ctx.registry) vault.touch();
   const host = findHost(vault, ref);
+  requireAccess(ctx, "host", host.id);
+  const targetSnapshot = JSON.stringify(host);
   if (ctx.monitor && !ctx.monitor.isOnline(host)) throw new Error(`host "${host.name}" is offline (use list_hosts for reachable hosts)`);
   const base = { client, host: host.name, action, command, mode: host.mode };
 
@@ -49,6 +58,8 @@ export async function runCommand(ctx: Ctx, client: string, ref: string, command:
     }
   }
 
+  requireAccess(ctx, "host", host.id);
+  if (JSON.stringify(findHost(vault, host.id)) !== targetSnapshot) throw new Error("Resource configuration changed; retry for a new approval");
   const t0 = Date.now();
   try {
     const r = await runSsh(vault, host, command, Math.min(Math.max(timeoutSec, 1), 600));
@@ -63,8 +74,10 @@ export async function runCommand(ctx: Ctx, client: string, ref: string, command:
 /** kubectl on a stored cluster: same policy -> (approval) -> run -> audit flow as runCommand. `command` is a kubectl argument string. */
 export async function runKube(ctx: Ctx, client: string, ref: string, command: string, manifest?: string, timeoutSec = 60, requestTimeoutSec?: number) {
   const { vault, audit, approvals } = ctx;
-  vault.touch();
+  if (!ctx.registry) vault.touch();
   const cluster = findCluster(vault, ref);
+  requireAccess(ctx, "cluster", cluster.id);
+  const targetSnapshot = JSON.stringify(cluster);
   const text = command.trim().replace(/^kubectl\s+/, "");
   const shown = "kubectl " + text;
   const base = { client, host: "k8s:" + cluster.name, action: "kubectl", command: shown, mode: cluster.mode };
@@ -76,8 +89,8 @@ export async function runKube(ctx: Ctx, client: string, ref: string, command: st
     throw new Error(`Blocked: ${chk.reason}`);
   }
   if (cluster.mode === "approval") {
-    const cut = manifest !== undefined && manifest.length > 20_000;
-    const preview = manifest === undefined ? shown : [shown, "--- manifest (stdin) ---", manifest.slice(0, 20_000) + (cut ? "\n... (truncated)" : "")].join("\n");
+    if (manifest !== undefined && manifest.length > 20_000) throw new Error("Manifest exceeds the 20000 character approval limit; split it into smaller requests");
+    const preview = manifest === undefined ? shown : [shown, "--- manifest (stdin) ---", manifest].join("\n");
     const d = await approvals.request({ host: "k8s:" + cluster.name, command: preview, client }, vault.d.settings.approvalTimeoutSec);
     if (d !== "approved") {
       audit.log({ ...base, outcome: d });
@@ -85,6 +98,8 @@ export async function runKube(ctx: Ctx, client: string, ref: string, command: st
     }
   }
 
+  requireAccess(ctx, "cluster", cluster.id);
+  if (JSON.stringify(findCluster(vault, cluster.id)) !== targetSnapshot) throw new Error("Resource configuration changed; retry for a new approval");
   const t0 = Date.now();
   try {
     const full = withDefaults(chk.parsed, { context: cluster.context, namespace: cluster.namespace, requestTimeoutSec });

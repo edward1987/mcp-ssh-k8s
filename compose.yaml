@@ -1,0 +1,31 @@
+services:
+  app:
+    image: ${MCP_SSH_IMAGE:?Set MCP_SSH_IMAGE to a verified signed image at sha256 digest}
+    restart: "on-failure:3"
+    init: true
+    user: "1000:1000"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 128
+    mem_limit: 768m
+    cpus: 2
+    stop_grace_period: 15s
+    environment:
+      AUTH_URL: ${AUTH_URL:?Set AUTH_URL to your HTTPS origin}
+      MCP_PUBLIC_URL: ${MCP_PUBLIC_URL:?Set MCP_PUBLIC_URL to your HTTPS origin/mcp}
+      MCP_SSH_REQUIRE_SIGNED_INTEGRITY: "1"
+      MCP_SSH_INTEGRITY_PUBLIC_KEY: ${MCP_SSH_INTEGRITY_PUBLIC_KEY:?Set the trusted release public key}
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - data:/var/lib/mcp-ssh
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=64m,mode=1777
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+volumes:
+  data:

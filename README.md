@@ -2,12 +2,12 @@
 
 [![Model Context Protocol](https://img.shields.io/badge/MCP-Compatible-blue.svg)](https://modelcontextprotocol.io/)
 [![Security](https://img.shields.io/badge/Security-Zero--Trust%20Vault-green.svg)](#security-model)
-[![Node.js](https://img.shields.io/badge/Node.js-%3E%3D20-brightgreen.svg)](https://nodejs.org/)
+[![Node.js](https://img.shields.io/badge/Node.js-24_LTS-brightgreen.svg)](https://nodejs.org/)
 [![License](https://img.shields.io/badge/License-MIT-purple.svg)](#license)
 
-**mcp-ssh-k8s** is a self-hosted, Zero-Trust gateway that connects AI agents (**Claude Code**, **Claude Desktop**, **ChatGPT**, **Cursor**, etc.) to your SSH servers and Kubernetes clusters via the [Model Context Protocol](https://modelcontextprotocol.io/).
+**mcp-ssh-k8s** is a self-hosted, Zero-Trust gateway that connects AI agents (**Claude Desktop**, **Claude Code CLI**, **Codex Desktop**, **Codex CLI**, **ChatGPT**, **Cursor**, etc.) to your SSH servers and Kubernetes clusters via the [Model Context Protocol](https://modelcontextprotocol.io/).
 
-Instead of granting AI models direct shell access or exposing raw SSH private keys and kubeconfigs, **mcp-ssh** acts as an intelligent intermediary. It stores all credentials in an AES-256-GCM encrypted local vault, enforces granular policy controls (`read-only`, `approval`, `free`), maintains an immutable audit trail, and gives human operators full visibility and control over every command executed.
+Instead of granting AI models direct shell access or exposing raw SSH private keys and kubeconfigs, **mcp-ssh** acts as an intermediary. It stores SSH credentials in an AES-256-GCM encrypted local vault, enforces policy controls (`read-only`, `approval`, `free`), records an audit trail, and gives human operators visibility and control over commands executed.
 
 > 📖 **[Ghid complet de utilizare pas cu pas în limba română găsiți aici (docs/GHID_UTILIZARE.md)](docs/GHID_UTILIZARE.md)**
 
@@ -43,7 +43,7 @@ flowchart LR
         K8s[Kubernetes Clusters]
     end
 
-    Claude -->|"Bearer Token (Local HTTP)"| McpPort
+    Claude -->|"Individual OAuth"| McpPort
     ChatGPT -.->|"Outbound TLS"| Tunnel
     Tunnel -->|"Injects Token (Loopback Only)"| McpPort
 
@@ -61,7 +61,7 @@ flowchart LR
 
 ## Key Features
 
-- 🔐 **Zero-Exposure Encrypted Vault**: Master password encrypted with `scrypt` (N=2¹⁷) + `AES-256-GCM`. Private keys, passwords, and kubeconfigs are never stored in plaintext on disk and are decrypted only ephemerally in RAM when executing approved commands.
+- 🔐 **Encrypted Vault**: Keys are derived with `scrypt` (N=2¹⁷), and persistent vault contents use `AES-256-GCM`. SSH credentials are decrypted for authorized operations. Kubectl uses a private temporary kubeconfig that is deleted afterward; container and systemd deployments place these temporary files on memory-backed storage.
 - 🛡️ **Three Safety Modes Per Host/Cluster**:
   - `read-only`: Strictly limits AI to harmless inspection commands (`uptime`, `free`, `df`, `cat`, `kubectl get`, `kubectl describe`, etc.). Rejects shell chaining (`&&`, `;`, `|`, `` ` ``), redirects (`>`, `<`), and blocks reading Kubernetes secrets or streaming commands (`-f`, `-w`).
   - `approval`: Every proposed command is placed in an interactive queue in the Web UI. The AI pauses execution until a human operator clicks **Approve** or **Deny**.
@@ -72,8 +72,8 @@ flowchart LR
   - OpenSSH `~/.ssh/config` parser (including imported `IdentityFile` keys).
   - Termius CSV export importer.
   - **Offline Local Termius Desktop Importer** (Windows): Reads Termius' local IndexedDB without cloud access, decrypts credentials via the Windows Credential Manager key, and securely imports hosts, tags, passwords, and SSH keys.
-- 📝 **Tamper-Evident Audit Trail**: Every tool invocation, command, operator decision, exit code, execution latency, and error is appended to `data/audit.jsonl` (with all secrets redacted).
-- 🔒 **Auto-Lock Security Timer**: Automatically seals the vault after an idle timeout. When sealed, the MCP endpoint returns `503 Service Unavailable` until unlocked with the master password.
+- 📝 **Audit Trail**: Command decisions and execution outcomes are appended to `data/audit.jsonl`. Common inline credential formats are redacted. The local file is not immutable or cryptographically tamper-evident; use an external protected log collector when required. Avoid secrets in command text.
+- 🔒 **Auto-Lock Security Timer**: Automatically seals the vault after an idle timeout. OAuth and authenticated tool discovery stay available; resource operations return an MCP tool error with the vault UI address until the user unlocks the vault.
 
 ---
 
@@ -84,55 +84,43 @@ flowchart LR
 Running `mcp-ssh` locally on your workstation is the foundational security guarantee of this system:
 
 1. **No Third-Party Secret Storage**: Your SSH private keys, bastion credentials, root passwords, and cloud kubeconfigs remain exclusively on your physical machine. They are never uploaded to a third-party SaaS or intermediary server.
-2. **True Air-Gapped Authorization**: The Admin Web UI ([http://127.0.0.1:7777](http://127.0.0.1:7777)) is hard-coded to listen **only on the loopback interface (`127.0.0.1`)**. It cannot be reached from your local LAN or the internet. Only you, sitting at your physical computer, can unlock the vault or approve sensitive commands.
+2. **Loopback Administration by Default**: The internal Admin Web UI ([http://127.0.0.1:7777](http://127.0.0.1:7777)) listens **only on loopback (`127.0.0.1`)**. Workstation mode is local. Server deployments intentionally provide authenticated remote access through the optional HTTPS gateway/reverse proxy, with individual accounts, MFA and resource policies. Initial administrator bootstrap remains loopback-only.
 3. **Defense Against Prompt Injection**: If a rogue LLM prompt or compromised dependency instructs the AI to exfiltrate private keys, `mcp-ssh` rejects the request: tool descriptions and endpoints never return private keys or raw kubeconfigs.
 
 ---
 
-### 2. The ChatGPT Challenge & OpenAI Secure MCP Tunnel
+### 2. Individual OAuth, including through Secure MCP Tunnel
 
-Connecting ChatGPT Web to a local MCP server presents a unique architectural problem:
+All clients authenticate with their own application account and MFA. Installing a connector in a workspace grants no host access. OAuth tokens identify the user; grants on stable host/cluster IDs control access. New members have no grants.
 
-- **The Problem with ChatGPT Custom MCP**: Unlike developer tools (such as Claude Code or Claude Desktop) that run locally or let you supply custom HTTP headers (`Authorization: Bearer <secret>`), ChatGPT Web connects from OpenAI's cloud servers and only supports **OAuth 2.0** or **No Authentication**.
-- **The Pitfall of Naive Port Forwarding (e.g. ngrok, public Cloudflare)**: If you expose your local MCP server to the public internet without authentication to satisfy ChatGPT, **anyone who discovers the URL can execute commands on your servers**.
-- **The Solution: OpenAI Secure MCP Tunnel (`tunnel-client`)**:
-  `mcp-ssh` includes a built-in manager for OpenAI's official open-source [`tunnel-client`](https://github.com/openai/tunnel-client):
+OpenAI Secure MCP Tunnel provides private connectivity and forwards the individual OAuth credential. It no longer injects a shared bearer token. Choose **OAuth** in ChatGPT. The authorization service must be separately reachable through HTTPS; the tunnel does not automatically publish the login pages.
 
-```
-[ChatGPT Web (OpenAI Cloud)]
-            │  (Connection: Tunnel, Auth: None)
-            ▼
-[OpenAI Hosted Tunnel Gateway]
-            │
-            │  Outbound TLS Tunnel (Established from inside your network)
-            ▼
-[Local `tunnel-client` runtime on your PC]
-            │
-            │  Injects: Authorization: Bearer <chatgpt-tunnel-token>
-            ▼
-[mcp-ssh MCP Server (127.0.0.1:7778)]
-```
+See [authentication and migration](docs/AUTHENTICATION.md) for deployment and recovery instructions.
 
-#### Why this architecture is superior:
-- 🚀 **Zero Inbound Ports / No Firewall Openings**: The tunnel client establishes an **outbound** TLS connection to OpenAI. You do not need to open router ports, configure port forwarding, or set up dynamic DNS.
-- 🔑 **Tokens Never Leave Your Machine**: ChatGPT is configured with *No Authentication*. Instead, your local `tunnel-client` injects a dedicated bearer token (`chatgpt-tunnel`) inside your loopback interface before the request hits `mcp-ssh`. The secret token never touches OpenAI's servers or the public internet.
-- ⚡ **Instant Kill-Switch**: You can revoke the `chatgpt-tunnel` token with a single click in the **Tokens** tab of the Admin UI, cutting off ChatGPT's access immediately without stopping the server or disturbing other clients.
-- 🔎 **Automated & Verified**: The Admin UI downloads the official `tunnel-client` binary directly from OpenAI's GitHub releases, verifies its SHA-256 hash, and monitors its health and runtime logs automatically.
+Administrators manage the shared tunnel, private HTTPS/Cloudflare and component installers at **`/identity/admin`**. These instance controls require an administrator session and CSRF protection and work while personal vaults are locked. Members cannot invoke installers or read server-local SSH/Termius files; CSV uploads remain available for their own vaults.
 
----
+Gemini Web and Claude Web can share a public HTTPS endpoint through the **Cloudflare web tunnel** in the same admin page. Open the API token creation link, save your API token (or Global API Key with email), select an active domain and subdomain, and choose **Create and connect — 1 click**. The application installs the verified `cloudflared` runtime, creates a managed tunnel and proxied DNS record, configures ingress to the loopback MCP port, activates OAuth discovery without restarting and starts the connection. Credentials are encrypted and partial setup can be resumed without duplicating resources. The auto-connect checkbox controls startup at the next application launch. Existing `AUTH_URL` and `MCP_PUBLIC_URL` environment settings must match the chosen hostname. Manual setup with an existing tunnel token remains available. Adding the connector and authorizing the individual account still happen in Gemini or Claude. See [web connection setup](docs/WEB_CLIENTS.md).
 
 ## Installation & Quick Start
+
+### Docker, Kubernetes and Linux services
+
+See [deployment instructions](docs/DEPLOYMENT.md) for Docker Compose, Kubernetes with TLS ingress and persistent storage, and a hardened Linux systemd service. The optional external gateway keeps administration and MCP listeners on loopback. Container builds exclude local vaults and credentials, run as UID 1000 with a read-only root filesystem, and expose health/readiness probes.
+
+The default container target requires an Ed25519-signed application manifest. The [container release workflow](.github/workflows/release-container.yml) tests the same Linux amd64 image in Docker and a temporary Kubernetes cluster, blocks HIGH/CRITICAL CVEs, and publishes to GHCR with provenance, an SBOM and deployment manifests pinned to its digest. See [container release setup](docs/CONTAINER_RELEASE.md) for the protected CI signing secret and installation. Unsigned development builds require the explicit `runtime-dev` target. Integrity incidents stop the process and remain recorded on the data volume/PVC across restarts.
+
+Read the [security review and outstanding findings](docs/SECURITY_REVIEW.md) before production deployment. Kubeconfig credential helpers, insecure TLS, local file references, and URL manifests are rejected, including in previously stored configurations. Use embedded short-lived credentials and enforce least privilege at the target cluster too.
 
 ### Windows installer (recommended)
 
 Download the **[latest Windows installer](https://github.com/edward1987/mcp-ssh-k8s/releases/latest)**. Node.js is included. During setup, choose your data folder and whether to **start automatically with Windows as a service**.
 
-Already using this project? Stop the old instance and select its existing `data` folder (the one containing `vault.json`). Setup backs up and reuses your vault and audit history; your master password and MCP tokens remain the same. The vault must be unlocked in the browser after each restart. Uninstalling preserves your data.
+Already using this project? Stop the old instance and select its existing `data` folder (the one containing `vault.json`). Setup backs up and reuses your vault and audit history; your master password remains the same; legacy MCP tokens are invalidated on unlock. The vault must be unlocked in the browser after each restart. Uninstalling preserves your data.
 
 **[Windows installation and existing database guide / Ghid Windows (RO)](docs/WINDOWS_INSTALL.md)**
 
 ### Prerequisites
-- **Node.js**: `v20.x` or higher
+- **Node.js**: `24.22.2+` in the Node 24 LTS line (or supported Node 26.13+). Node 20 is not supported; authentication uses built-in `node:sqlite`.
 - **npm**: `v9.x` or higher
 - **Optional**:
   - `kubectl` in your system `PATH` (for Kubernetes management)
@@ -143,7 +131,7 @@ Already using this project? Stop the old instance and select its existing `data`
 ```bash
 git clone https://github.com/edward1987/mcp-ssh-k8s.git
 cd mcp-ssh-k8s
-npm install
+npm ci --ignore-scripts
 ```
 
 ### 2. Build & Launch
@@ -157,60 +145,25 @@ npm run build
 npm start
 ```
 
-### 3. Initialize the Vault
-1. Open your browser and navigate to **[http://127.0.0.1:7777](http://127.0.0.1:7777)**.
-2. On your first visit, enter a strong master password (minimum 12 characters). This password derives your vault encryption key via `scrypt`.
-3. Add your SSH hosts or import them via the **Import** tab (`~/.ssh/config`, Termius CSV, or local Termius desktop app).
-4. Navigate to the **Tokens** tab and generate a new MCP client token (e.g. for `claude-code`).
+### 3. Initialize accounts and unlock the vault
 
----
+1. Open [the local administration UI](http://127.0.0.1:7777), select initial administrator setup, and enter the existing vault master password (or choose one for a new vault).
+2. Activate the administrator account with a separate password and TOTP. Save the recovery codes.
+3. Sign in, open the vault UI and unlock the vault with its master password. It remains locked after each restart.
+4. Add hosts/clusters, then use **Conturi si acces** to invite members and assign direct or group grants. The existing host `group` label is separate from security groups.
+
+See [personal vaults, revocable sharing and private HTTPS with Cloudflare DNS-01](docs/PERSONAL_VAULTS.md) for the current multi-user deployment and migration model.
 
 ## Client Integration
 
-### Claude Code CLI
+The **Clienti AI** page generates OAuth configurations without credentials in workspace files. Claude Code and Codex use native HTTP OAuth; Claude Desktop uses the bundled stdio bridge, which prints a browser authorization URL to MCP stderr. Its credentials live in the OS user's home directory, outside the workspace.
 
-Add the server using the Streamable HTTP transport:
-
-```bash
-claude mcp add --transport http ssh http://127.0.0.1:7778/mcp --header "Authorization: Bearer <YOUR_MCP_TOKEN>"
+```sh
+claude mcp add --scope user --transport http ssh http://127.0.0.1:7778/mcp
+claude mcp login ssh
 ```
 
-### Claude Desktop
-
-Edit your `claude_desktop_config.json`:
-
-```json
-{
-  "mcpServers": {
-    "ssh": {
-      "command": "npx",
-      "args": [
-        "-y",
-        "mcp-remote",
-        "http://127.0.0.1:7778/mcp",
-        "--header",
-        "Authorization: Bearer <YOUR_MCP_TOKEN>"
-      ]
-    }
-  }
-}
-```
-
-### ChatGPT (via OpenAI Secure MCP Tunnel)
-
-1. Go to [platform.openai.com/settings/organization/tunnels](https://platform.openai.com/settings/organization/tunnels).
-2. Create a tunnel, associate it with your ChatGPT workspace, and copy the **Tunnel ID** (format: `tunnel_...`).
-3. Create an OpenAI API Key with `Tunnels: Read & Use` permissions.
-4. In the `mcp-ssh` Web UI ([http://127.0.0.1:7777](http://127.0.0.1:7777)), go to the **ChatGPT** tab:
-   - Paste the **Tunnel ID** and **API Key**, then click **Save**.
-   - Click **Install Tunnel Client** followed by **Start Tunnel**.
-5. In ChatGPT:
-   - Go to **ChatGPT Settings** > **Connected Apps** / **Plugins** > **+ Add custom MCP server**.
-   - Connection Type: **Tunnel** > select your tunnel.
-   - Authentication: **No authentication** (handled locally by `tunnel-client`).
-   - Click **Create**. ChatGPT will immediately discover your hosts and Kubernetes clusters!
-
----
+For ChatGPT, select the HTTPS endpoint or Secure MCP Tunnel and **OAuth**. Every workspace member connects their own application account. Configure `AUTH_URL` and `MCP_PUBLIC_URL` as described in [the deployment guide](docs/AUTHENTICATION.md).
 
 ## Available MCP Tools
 
@@ -222,7 +175,7 @@ AI models connected via `mcp-ssh` have access to the following scoped tools:
 | `get_security_checklist` | *none* | Lists hosts added to the security checklist with their status, notes, and guidelines. | Secrets excluded; returns target hosts and audit inspection guidelines. |
 | `run_security_check` | `host`, `focus` | Performs an automated read-only security audit (auth logs, failed logins, ports, services, disk). | Read-only non-intrusive audit commands; single approval in approval mode. |
 | `run_command` | `host`, `command`, `timeout_seconds` | Runs a shell command on the specified host and returns stdout, stderr, and exit code. | Filtered by policy (`read-only` allowlist, human `approval` queue, or `free`). |
-| `read_file` | `host`, `path`, `max_bytes` | Reads a text file safely via `cat -- <path>`. | Read-only mode validates file access; binary files or paths with metacharacters are rejected. |
+| `read_file` | `host`, `path` | Reads a file via `cat -- <path>`, subject to the host policy and output limit. | Read-only policy rejects shell metacharacters. Files accessible to the remote SSH user may contain secrets; use a least-privilege account. |
 | `get_host_info` | `host` | Collects vital server stats (OS, kernel, uptime, RAM, disks, listening ports, Docker containers). | Safe, standardized read-only telemetry inspection. |
 | `list_clusters` | *none* | Lists available Kubernetes clusters (name, context, default namespace, mode). | Credentials and cluster certificates are stripped from output. |
 | `kubectl` | `cluster`, `args`, `manifest`, `timeout_seconds` | Runs `kubectl` against a stored cluster. | Disallows local file access, `--kubeconfig`, `--token`, and `--raw`. In `read-only` mode, secret resources and `--watch` are strictly forbidden. |
@@ -250,7 +203,7 @@ AI models connected via `mcp-ssh` have access to the following scoped tools:
 - **Vault Key Derivation**: Scrypt parameters: `N = 131072` (2¹⁷), `r = 8`, `p = 1`, output length 32 bytes, with a cryptographically random 16-byte salt.
 - **Host Key Pinning**: TOFU (Trust On First Use) model. SSH host keys are pinned into the vault during the first connection; if a remote host key changes, execution is aborted to prevent MITM attacks.
 - **CSRF & Session Security**: Admin endpoints require a cryptographically random CSRF token issued per browser session.
-- **Rate-Limiting & Fail2Ban**: Failed master password and MCP token attempts are throttled with exponential backoff to thwart brute-force attempts.
+- **Rate Limiting**: Login, vault and MCP authentication attempts are throttled. Server deployments should also enforce per-client limits at the HTTPS reverse proxy.
 
 ---
 
@@ -260,13 +213,20 @@ AI models connected via `mcp-ssh` have access to the following scoped tools:
 | :--- | :--- | :--- |
 | `ADMIN_PORT` | `7777` | Port for the Admin Web UI & Approval queue (binds strictly to `127.0.0.1`). |
 | `MCP_PORT` | `7778` | Port for the Streamable HTTP MCP server endpoint. |
-| `MCP_BIND` | `127.0.0.1` | Network interface for the MCP endpoint (`127.0.0.1` recommended). |
+| `AUTH_URL` | `http://127.0.0.1:7778` | Canonical authorization service origin; HTTPS for remote deployment. |
+| `MCP_PUBLIC_URL` | `http://127.0.0.1:7778/mcp` | Canonical OAuth resource URL, matching the client endpoint. |
 | `MCP_SSH_DATA` | `./data` | Directory where `vault.json`, `audit.jsonl`, and local binaries reside. |
 | `KUBECTL_PATH` | `kubectl` | Path to the `kubectl` binary on the host machine. |
+| `GATEWAY_PORT` | unset (container: `8080`) | Opt-in HTTP backend for a TLS reverse proxy; requires HTTPS URLs at the same origin. |
+| `GATEWAY_BIND` | `127.0.0.1` (container: `0.0.0.0`) | Gateway bind IP. Publish only to a local TLS proxy or isolated pod network. |
 
 ---
 
 ## Development & Testing
+
+The web control center includes a responsive dashboard, SSH search and policy filters, dark/light themes, and account/access forms. Assets are served locally with a strict CSP; background polling does not renew idle sessions. See [authentication](docs/AUTHENTICATION.md) for deployment and session behavior.
+
+Run `npm run test:browser` for the browser security and interface checks. Windows uses the installed Microsoft Edge by default; on other systems install Chromium with `npx playwright install chromium`. Set `PLAYWRIGHT_CHANNEL=chrome` to use an installed Chrome browser. Tests use isolated temporary data and synthetic credentials.
 
 ```bash
 # Run unit and end-to-end test suite (vitest)

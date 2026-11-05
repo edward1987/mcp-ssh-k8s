@@ -1,6 +1,9 @@
 # Dependencies & build output
 node_modules/
 dist/
+integrity.json
+integrity.sig
+integrity.pub
 
 # Local data & state (vault, audit logs, local binaries)
 data/
@@ -32,6 +35,8 @@ Thumbs.db
 # Test coverage & caches
 coverage/
 .vitest/
+test-results/
+playwright-report/
 
 # Windows release staging, downloads and installers (never commit local data)
 .release-cache/

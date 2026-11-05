@@ -1,4 +1,5 @@
-import { spawnSync } from "node:child_process";
+import { promisify } from 'node:util';
+import { execFile, spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import nacl from "tweetnacl";
@@ -75,24 +76,24 @@ export function termiusDbDir(): string | null {
 export function helperReady(dataDir: string) {
   const exe = pyExe(dataDir);
   if (!existsSync(exe)) return false;
-  return spawnSync(exe, ["-c", "import ccl_chromium_reader"], { windowsHide: true }).status === 0;
+  return spawnSync(exe, ["-c", "import ccl_chromium_reader"], { windowsHide: true, timeout: 3000 }).status === 0;
 }
 
 /** Creates data/py (venv) and installs ccl_chromium_reader from GitHub (not on PyPI). */
-export function setupHelper(dataDir: string) {
+const runInstaller = promisify(execFile);
+export async function setupHelper(dataDir: string) {
+  if (process.platform !== 'win32') throw new Error('Windows required');
   const venv = dataDirOf(dataDir);
+  const options = { windowsHide: true, timeout: 300_000, maxBuffer: 1024 * 1024 };
   if (!existsSync(pyExe(dataDir))) {
     const tries: [string, string[]][] = [["python", ["-m", "venv", venv]], ["py", ["-3", "-m", "venv", venv]]];
     let ok = false;
-    for (const [cmd, args] of tries) if (spawnSync(cmd, args, { windowsHide: true }).status === 0) { ok = true; break; }
+    for (const [cmd, args] of tries) {
+      try { await runInstaller(cmd, args, options); ok = true; break; } catch { /* try the other Python launcher */ }
+    }
     if (!ok) throw new Error("Python 3 is required (python.exe not found in PATH)");
   }
-  const r = spawnSync(pyExe(dataDir), ["-m", "pip", "install", "--quiet", "git+https://github.com/cclgroupltd/ccl_chromium_reader"], {
-    windowsHide: true,
-    encoding: "utf8",
-    timeout: 300_000,
-  });
-  if (r.status !== 0) throw new Error("pip install failed (git and internet access are required): " + (r.stderr || "").slice(-400));
+  await runInstaller(pyExe(dataDir), ["-m", "pip", "install", "--quiet", "git+https://github.com/cclgroupltd/ccl_chromium_reader"], options);
 }
 
 export type Dump = Record<string, Record<string, any>[]>;

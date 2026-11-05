@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import { decrypt, deriveKey, encrypt, newKdf, type VaultFile } from "./crypto.js";
@@ -55,6 +55,7 @@ export interface ChecklistItem {
 }
 
 export interface VaultData {
+  sharedRefs?: string[];
   hosts: Host[];
   keys: Key[];
   clusters: Cluster[];
@@ -72,7 +73,7 @@ const empty = (): VaultData => ({
   clusters: [],
   tokens: [],
   knownHosts: {},
-  settings: { autoLockMinutes: 30, maxOutputBytes: 65536, approvalTimeoutSec: 120 },
+  settings: { autoLockMinutes: 10, maxOutputBytes: 65536, approvalTimeoutSec: 120 },
   checklist: [],
 });
 
@@ -83,7 +84,9 @@ export class Vault {
   private kdf: VaultFile["kdf"] | null = null;
   private data: VaultData | null = null;
   private timer: NodeJS.Timeout | null = null;
+  private idleDeadline: number | null = null;
   onLock?: () => void;
+  onSave?: () => void;
 
   constructor(private path: string) {}
 
@@ -91,16 +94,22 @@ export class Vault {
     return existsSync(this.path);
   }
   get unlocked() {
+    // Also enforce the deadline synchronously if the event loop delayed the timer.
+    if (this.data && this.idleDeadline !== null && Date.now() >= this.idleDeadline) this.lock();
     return this.data !== null;
   }
 
+  get idleExpiresAt(): number | null { return this.unlocked ? this.idleDeadline : null; }
+
   private require(): VaultData {
-    if (!this.data) throw new Error("vault locked");
-    return this.data;
+    if (!this.unlocked) throw new Error("vault locked");
+    return this.data!;
   }
   get d(): VaultData {
     return this.require();
   }
+
+  backup() { if (this.exists && !existsSync(this.path + ".pre-identity.bak")) copyFileSync(this.path, this.path + ".pre-identity.bak", 1); }
 
   async create(password: string) {
     if (this.exists) throw new Error("vault already exists");
@@ -124,7 +133,13 @@ export class Vault {
     this.key = key;
     this.kdf = f.kdf;
     const raw = JSON.parse(plain);
-    this.data = { ...empty(), ...raw, checklist: Array.isArray(raw.checklist) ? raw.checklist : [] };
+    this.data = { ...empty(), ...raw, settings: { ...empty().settings, ...raw.settings }, checklist: Array.isArray(raw.checklist) ? raw.checklist : [] };
+    if (this.d.tokens.length || this.d.tunnel?.token) {
+      this.backup();
+      this.d.tokens = [];
+      if (this.d.tunnel) { this.d.tunnel.token = ""; this.d.tunnel.tokenId = ""; this.d.tunnel.autoStart = false; }
+      this.save();
+    }
     this.touch();
   }
 
@@ -145,6 +160,7 @@ export class Vault {
     this.key?.fill(0);
     this.key = null;
     this.data = null;
+    this.idleDeadline = null;
     if (this.timer) clearTimeout(this.timer);
     this.timer = null;
     this.onLock?.();
@@ -152,13 +168,14 @@ export class Vault {
 
   /** Reset the idle auto-lock timer. */
   touch() {
-    if (!this.data) return;
+    if (!this.unlocked) return;
     if (this.timer) clearTimeout(this.timer);
-    const min = this.data.settings.autoLockMinutes;
+    const min = this.data!.settings.autoLockMinutes;
     if (min > 0) {
+      this.idleDeadline = Date.now() + min * 60_000;
       this.timer = setTimeout(() => this.lock(), min * 60_000);
       this.timer.unref();
-    }
+    } else this.idleDeadline = null;
   }
 
   save() {
@@ -168,6 +185,7 @@ export class Vault {
     const tmp = this.path + ".tmp";
     writeFileSync(tmp, JSON.stringify(out), { mode: 0o600 });
     renameSync(tmp, this.path);
+    this.onSave?.();
   }
 
   async changePassword(oldPw: string, newPw: string) {

@@ -8,8 +8,8 @@ $root = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
 $cache = Join-Path $root '.release-cache'
 $release = Join-Path $root 'release'
 $stage = Join-Path $release 'payload'
-$nodeVersion = '24.22.1'
-$nodeHash = 'd2046d28c2c3dcd211ac5145c0bf30e2047ef9dfb306693c8c6e2eccd8b95fa5'
+$nodeVersion = '24.22.2'
+$nodeHash = 'ca1bff5d8ead13c9f2ea404a176db46bd430704d5b5113734049fa365e7799e2'
 $winswHash = '05b82d46ad331cc16bdc00de5c6332c1ef818df8ceefcd49c726553209b3a0da'
 
 function Run([string]$Exe, [string[]]$Arguments) {
@@ -23,6 +23,9 @@ function Download([string]$Url, [string]$Path, [string]$Hash) {
 
 Push-Location $root
 try {
+    if (-not $env:MCP_SSH_INTEGRITY_SIGNING_KEY) { throw 'A release requires the protected CI secret MCP_SSH_INTEGRITY_SIGNING_KEY (Ed25519 PEM). No unsigned installer will be built.' }
+    $releaseSigningKey = $env:MCP_SSH_INTEGRITY_SIGNING_KEY
+    Remove-Item Env:MCP_SSH_INTEGRITY_SIGNING_KEY
     $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
     if ($version -notmatch '^\d+\.\d+\.\d+$') { throw 'The release needs a stable semver version.' }
     if (-not $IsccPath) {
@@ -56,6 +59,7 @@ try {
     }
     New-Item -ItemType Directory -Path (Join-Path $stage 'scripts') | Out-Null
     Copy-Item -LiteralPath (Join-Path $root 'scripts\termius_dump.py') -Destination (Join-Path $stage 'scripts')
+    foreach ($name in @('start.mjs', 'integrity.mjs')) { Copy-Item -LiteralPath (Join-Path $root "scripts\$name") -Destination (Join-Path $stage 'scripts') }
     foreach ($name in @('configure.ps1', 'launch.ps1', 'stop.ps1')) { Copy-Item -LiteralPath (Join-Path $PSScriptRoot $name) -Destination $stage }
     Push-Location $stage
     try { Run 'npm.cmd' @('ci', '--omit=dev', '--omit=optional', '--ignore-scripts', '--no-audit', '--no-fund') } finally { Pop-Location }
@@ -81,6 +85,11 @@ The installer contains application code and public runtimes only. No user vault,
     $icon = [Drawing.Icon]::FromHandle($bitmap.GetHicon())
     $stream = [IO.File]::Create((Join-Path $stage 'app.ico'))
     try { $icon.Save($stream) } finally { $stream.Dispose(); $icon.Dispose(); $graphics.Dispose(); $font.Dispose(); $brush.Dispose(); $bitmap.Dispose() }
+    try {
+        $env:MCP_SSH_INTEGRITY_SIGNING_KEY = $releaseSigningKey
+        Run 'node.exe' @((Join-Path $root 'scripts\integrity.mjs'), 'create', $stage, '--signed')
+    } finally { Remove-Item Env:MCP_SSH_INTEGRITY_SIGNING_KEY -ErrorAction SilentlyContinue; $releaseSigningKey = $null }
+    # The signing secret must not be inherited by the tested application or installer.
     Run 'node.exe' @((Join-Path $PSScriptRoot 'smoke-release.mjs'))
     if ((Test-Path -LiteralPath (Join-Path $stage 'data')) -or (Test-Path -LiteralPath (Join-Path $stage 'install.json'))) { throw 'Unexpected user data in payload.' }
     Run $IsccPath @("/DAppVersion=$version", "/DStageDir=$stage", "/DOutputDir=$release", (Join-Path $PSScriptRoot 'installer.iss'))

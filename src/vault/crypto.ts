@@ -9,11 +9,26 @@ export interface VaultFile {
 }
 
 const KDF = { N: 1 << 17, r: 8, p: 1 };
+let active = 0;
+const waiting: (() => void)[] = [];
 
 export function deriveKey(password: string, salt: Buffer, params = KDF): Promise<Buffer> {
-  return new Promise((resolve, reject) =>
-    scrypt(password, salt, 32, { ...params, maxmem: 256 * 1024 * 1024 }, (e, k) => (e ? reject(e) : resolve(k))),
-  );
+  // Each scrypt consumes ~128 MiB. Bound concurrency even when HTTP clients flood logins.
+  if (params.N !== KDF.N || params.r !== KDF.r || params.p !== KDF.p) return Promise.reject(new Error("Unsupported vault KDF parameters"));
+  return new Promise((resolve, reject) => {
+    const run = () => {
+      active++;
+      const done = (e: Error | null, key?: Buffer) => {
+        active--; waiting.shift()?.();
+        if (e) reject(e); else resolve(key!);
+      };
+      try { scrypt(password, salt, 32, { ...KDF, maxmem: 256 * 1024 * 1024 }, done); }
+      catch (e) { done(e as Error); }
+    };
+    if (active < 2) run();
+    else if (waiting.length < 8) waiting.push(run);
+    else reject(new Error("Too many password operations; try again later"));
+  });
 }
 
 export function newKdf() {

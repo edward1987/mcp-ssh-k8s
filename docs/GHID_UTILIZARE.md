@@ -52,7 +52,11 @@ npm start
 
 ## 2. Panoul de Administrare & Securitatea Vault-ului
 
-### Crearea Vault-ului (La prima accesare)
+### Configurarea initiala
+
+Inainte de administrarea vaultului, creeaza administratorul prin `/identity/bootstrap`, activeaza MFA si autentifica-te. Detalii in [AUTHENTICATION.md](AUTHENTICATION.md).
+
+### Crearea Vault-ului
 1. Deschide în browser: **[http://127.0.0.1:7777](http://127.0.0.1:7777)**.
 2. La prima pornire, ți se cere să setezi **Parola Master** (minim 12 caractere).
 3. În baza acestei parole, aplicația derivă cheia criptografică folosind `scrypt` ($N=2^{17}$, $r=8$, $p=1$) și inițializează fișierul criptat `data/vault.json` cu algoritmul **AES-256-GCM**.
@@ -63,7 +67,7 @@ npm start
 - În **Setări**, poți stabili un interval de **Auto-lock** (ex. 30 minute de inactivitate).
 - Când vault-ul este blocat:
   - Nicio cheie privată sau parolă nu mai există în memoria RAM.
-  - Orice apel venit din partea AI-ului pe portul MCP (7778) primește imediat codul HTTP `503 Service Unavailable` cu mesajul *"vault is locked"*.
+  - OAuth, inițializarea MCP și catalogul toolurilor rămân disponibile utilizatorilor autentificați. Apelurile care citesc resurse sau execută operații primesc o eroare MCP *"Vault locked"*, cu adresa interfeței în care utilizatorul își deblochează vaultul.
 
 ---
 
@@ -166,77 +170,19 @@ Tab-ul **Import** îți permite să populezi rapid serverul cu conexiunile exist
 
 ---
 
-## 7. Generarea și Gestionarea Tokenurilor MCP
+## 7. Conturi, MFA si permisiuni
 
-Pentru ca un client AI să poată comunica cu `mcp-ssh`, acesta trebuie să dețină un token de acces:
+Urmeaza [ghidul de autentificare](AUTHENTICATION.md). Configureaza administratorul local cu parola master, apoi activeaza contul cu o parola separata si TOTP. Din **Conturi si acces** poti invita utilizatori, gestiona grupuri si atribui hosturi/clustere. Membrii noi nu au acces implicit.
 
-1. Mergi în tab-ul **Tokenuri**.
-2. În secțiunea de jos, introdu un nume descriptiv pentru client (ex. `claude-code`, `laptop-cursor`).
-3. Apasă **Generează token**.
-4. **Copiază tokenul generat**: Acesta este afișat **o singură dată**. În baza de date este salvat exclusiv hash-ul SHA-256 al acestuia.
-5. **Revocare**: În cazul în care dorești să oprești accesul unui client, apasă pe **Revocă** lângă tokenul respectiv. Accesul este revocat instantaneu.
+## 8. Conectarea Clientilor AI
 
----
+Tab-ul **Clienti AI** genereaza configuratii OAuth fara tokenuri in workspace. Claude Code: `claude mcp login ssh`; Codex: `codex mcp login ssh`. Claude Desktop foloseste bridge-ul stdio si URL-ul afisat in logurile MCP.
 
-## 8. Conectarea Clienților AI
+## 9. ChatGPT si tunelul OpenAI
 
-### Claude Code CLI
-Rulează în terminalul tău:
-```bash
-claude mcp add --transport http ssh http://127.0.0.1:7778/mcp --header "Authorization: Bearer <TOKEN_GENERAT>"
-```
+Administratorul configurează tunelul comun și instalează/actualizează runtime-ul din **Administrare instanță** (`/identity/admin`). Pagina este accesibilă din cont și din vault chiar când vaultul personal este blocat. HTTPS privat și Cloudflare se configurează tot aici, în **HTTPS privat și DNS**. Instalările componentelor sunt rezervate administratorilor și afișează progresul și rezultatul în această pagină.
 
-### Claude Desktop
-Deschide fișierul de configurare Claude Desktop (`%APPDATA%\Claude\claude_desktop_config.json` pe Windows):
-```json
-{
-  "mcpServers": {
-    "ssh": {
-      "command": "npx",
-      "args": [
-        "-y",
-        "mcp-remote",
-        "http://127.0.0.1:7778/mcp",
-        "--header",
-        "Authorization: Bearer <TOKEN_GENERAT>"
-      ]
-    }
-  }
-}
-```
-
-### Cursor / Windsurf
-În setările MCP ale editorului, adaugă un server de tip `HTTP`:
-- **URL**: `http://127.0.0.1:7778/mcp`
-- **Headers**:
-  - `Authorization`: `Bearer <TOKEN_GENERAT>`
-
----
-
-## 9. Integrarea cu ChatGPT prin OpenAI Secure Tunnel
-
-ChatGPT Web nu permite introducerea de chei Bearer personalizate. Pentru a rezolva această problemă în siguranță, fără a expune porturi publice pe router, `mcp-ssh` integrează clientul oficial **OpenAI `tunnel-client`**:
-
-### Pasul 1: Obținerea credențialelor OpenAI Tunnel
-1. Intră pe [platform.openai.com](https://platform.openai.com) > **Settings** > **Tunnels**.
-2. Creează un tunel nou, asociază-l cu spațiul tău ChatGPT și copiază **Tunnel ID** (de forma `tunnel_...`).
-3. Generează o cheie API OpenAI cu permisiunile `Tunnels: Read & Use`.
-
-### Pasul 2: Configurarea în `mcp-ssh`
-1. În Web UI ([http://127.0.0.1:7777](http://127.0.0.1:7777)), mergi în tab-ul **ChatGPT**.
-2. Lipește **Tunnel ID** și **API Key**, apoi apasă **Salvează**.
-3. Dacă nu ai executabilul descărcat, apasă pe **Descarcă client tunnel** (se descarcă binarul oficial OpenAI verificat prin SHA-256).
-4. Apasă pe **Pornește tunel**. Starea va deveni verde (`running`, `ready`).
-   - În fundal, se creează automat un token dedicat numit `chatgpt-tunnel`.
-
-### Pasul 3: Activarea în ChatGPT Web
-1. Mergi pe [chatgpt.com](https://chatgpt.com) > **Settings** > **Connected Apps / Plugins**.
-2. Apasă pe **+ Add custom MCP server**.
-3. La tipul conexiunii alege: **Tunnel**, apoi selectează tunelul configurat la Pasul 1.
-4. La autentificare alege: **No authentication** (autentificarea o face automat `tunnel-client` pe mașina ta locală).
-5. Salvează. ChatGPT va descoperi uneltele `list_hosts`, `run_command`, `read_file`, `get_host_info`, `list_clusters`, `kubectl`.
-
----
+Alege **OAuth**, inclusiv prin tunel. Fiecare utilizator conecteaza propriul cont. Configureaza `AUTH_URL` si `MCP_PUBLIC_URL`; loginul trebuie accesibil separat prin HTTPS.
 
 ## 10. Fluxul de Aprobare Umană
 
@@ -283,9 +229,10 @@ Datele sunt persistate în fișierul `data/audit.jsonl`. Parolele sau cheile API
 
 ## 13. Depanare & FAQ
 
-#### 1. AI-ul raportează eroarea `503 Service Unavailable`
-- **Cauză**: Vault-ul este blocat (auto-lock).
-- **Soluție**: Intră pe `http://127.0.0.1:7777` și introdu parola master pentru deblocare.
+#### 1. AI-ul raportează `Vault locked` sau conectarea eșuează la discovery
+- **Vault locked**: Deschide interfața de pe `http://127.0.0.1:7777` (sau portul de administrare configurat), autentifică-te în același cont și deblochează vaultul. Repetă operația AI; parola master se introduce numai în interfața vaultului.
+- **Discovery**: Vaultul blocat nu trebuie să împiedice `initialize` și `tools/list`. Actualizează și repornește aplicația dacă primești `503 vault locked` în această etapă. Rădăcina portului MCP redirecționează acum către interfața vaultului.
+- **HTTP 503**: Verifică disponibilitatea serviciului/proxy-ului; aceasta nu mai este metoda prin care este semnalat un vault blocat.
 
 #### 2. Hostul dorit nu apare în lista returnată de `list_hosts`
 - **Cauză**: HostMonitor a verificat conexiunea TCP și serverul este offline sau portul SSH este filtrat/blocat de un firewall.
@@ -301,4 +248,4 @@ Datele sunt persistate în fișierul `data/audit.jsonl`. Parolele sau cheile API
 
 #### 4. Cum revoc accesul dacă am suspiciuni asupra unui client?
 - Mergi în tab-ul **Tokenuri** și apasă pe butonul **Revocă** din dreptul clientului.
-- Dacă folosești ChatGPT, poți opri tunelul direct din tab-ul **ChatGPT** (apasă **Oprește**) sau revoca tokenul `chatgpt-tunnel`.
+- Pentru ChatGPT, administratorul poate opri tunelul comun din **Administrare instanță → Oprește tunelul**. Aceasta întrerupe transportul pentru întreaga instanță. Pentru accesul unui singur utilizator, revocă conexiunile din **Conturi și acces**.

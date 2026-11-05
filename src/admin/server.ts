@@ -1,3 +1,6 @@
+import { identityRouter, session } from "../auth/web.js";
+import { identityContext } from "../auth/context.js";
+import type { OAuthProvider } from "../auth/oauth.js";
 import express from "express";
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
@@ -8,25 +11,40 @@ import ssh2 from "ssh2";
 const { utils } = ssh2;
 import { parseSshConfig, type ImportedHost } from "../import/sshconfig.js";
 import { parseTermiusCsv } from "../import/termius.js";
-import { buildFromDump, helperReady, readLocalKeys, runDump, setupHelper, termiusDbDir, type TermiusImport } from "../import/termiusLocal.js";
+import { buildFromDump, helperReady, readLocalKeys, runDump, termiusDbDir, type TermiusImport } from "../import/termiusLocal.js";
 import { inspectKubeconfig, runKubectl } from "../k8s/kubectl.js";
+import { CLIENTS, clientSetup } from "../clients.js";
 import { findHost, formatResult, type Ctx } from "../service.js";
 import { runHostSecurityAudit } from "../security.js";
 import { runSsh } from "../ssh/exec.js";
 import type { TunnelManager } from "../tunnel/manager.js";
+import { WebTunnelManager } from "../tunnel/web.js";
 import { normalizeKey } from "../vault/keys.js";
-import { sha256, type Cluster, type Host, type Mode } from "../vault/store.js";
+import { type Cluster, type Host, type Mode } from "../vault/store.js";
 
 const MODES: Mode[] = ["read-only", "approval", "free"];
 
-export function startAdmin(ctx: Ctx, port: number, webDir: string, tunnel: TunnelManager, opts: { dataDir: string; scriptsDir: string }) {
+export function startAdmin(ctx: Ctx, port: number, webDir: string, tunnel: TunnelManager, opts: { dataDir: string; scriptsDir: string; mcpPort: number; bridgePath: string; oauth: OAuthProvider; webTunnel?: WebTunnelManager }) {
   const { vault, audit, approvals } = ctx;
+  if (ctx.shares) ctx.shares.onRevoke = id => approvals.denyShare(id);
   const app = express();
   app.disable("x-powered-by");
+  app.use((req, res, next) => {
+    if (ctx.integrity && !ctx.integrity.check(req.method !== 'GET' || !req.path.startsWith('/api/'))) {
+      res.set({ 'Cache-Control': 'no-store', 'Content-Security-Policy': "default-src 'none'; frame-ancestors 'none'; form-action 'none'" });
+      if (req.path.startsWith('/api/')) return void res.status(503).json({ code: 'APPLICATION_INTEGRITY_FAILED', error: 'Integritatea aplicației nu a putut fi verificată. Nu introduce parole. Reinstalează aplicația dintr-o sursă de încredere.' });
+      return void res.status(503).type('html').send('<!doctype html><meta charset="utf-8"><h1>Integritatea aplicației nu a putut fi verificată</h1><p>Nu introduce parole. Reinstalează aplicația dintr-o sursă de încredere.</p>');
+    }
+    next();
+  });
   app.use(express.json({ limit: "5mb" }));
 
-  const sessions = new Map<string, { csrf: string }>();
-  vault.onLock = () => {
+  const sessions = new Map<string, { csrf: string; userId: string }>();
+  if (ctx.registry) ctx.registry.onLock = owner => {
+    for (const [id, item] of sessions) if (item.userId === owner) sessions.delete(id);
+    approvals.denyUser(owner);
+  };
+  else vault.onLock = () => {
     sessions.clear();
     approvals.denyAll();
     tunnel.stop();
@@ -40,29 +58,49 @@ export function startAdmin(ctx: Ctx, port: number, webDir: string, tunnel: Tunne
   app.use((req, res, next) => {
     if (!allowedHosts.has(req.headers.host ?? "")) return void res.status(403).send("forbidden host");
     const origin = req.headers.origin;
-    if (origin && !allowedHosts.has(origin.replace(/^https?:\/\//, ""))) return void res.status(403).send("forbidden origin");
-    res.setHeader("Content-Security-Policy", "default-src 'self'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'");
+    if (origin && origin !== opts.oauth.issuer.origin && ![...allowedHosts].some(h => origin === `http://${h}`)) return void res.status(403).send("forbidden origin");
+    res.setHeader("Content-Security-Policy", "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'; object-src 'none'");
     res.setHeader("X-Content-Type-Options", "nosniff");
     res.setHeader("Cache-Control", "no-store");
+    // Native same-origin form POSTs must retain their Origin. Never send URL paths or invitation tokens.
+    res.setHeader("Referrer-Policy", "strict-origin");
+    res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
     next();
   });
 
+  const webTunnel = opts.webTunnel ?? new WebTunnelManager(opts.oauth.store, opts.dataDir, opts.oauth.issuer.origin, opts.mcpPort, opts.oauth.resource.href, origin => opts.oauth.setPublicOrigin(origin));
+  app.use("/identity", identityRouter(ctx, opts.oauth, true, { tunnel, dataDir: opts.dataDir, webTunnel }));
+  app.use("/api", (req, res, next) => {
+    const s = session(opts.oauth.store, req);
+    if (!s || (!ctx.registry && s.user.role !== "administrator")) return void res.status(401).json({ error: "Sign in at /identity/login" });
+    identityContext.run({ userId: s.user.id, clientId: "admin-ui", sessionId: s.id, operator: true }, next);
+  });
+  app.use(['/api/tunnel', '/api/import/termius-local', '/api/import/sshconfig'], (req, res, next) => {
+    if (session(opts.oauth.store, req)?.user.role !== 'administrator') return void res.status(403).json({ error: 'Administrator required' }); next();
+  });
+  const vaultAttempts = new Map<string, { until: number; count: number }>();
+  app.use(['/api/unlock', '/api/setup', '/api/recover', '/api/migrate'], (req, res, next) => {
+    if (req.method !== 'POST') return next();
+    const id = identityContext.getStore()!.userId, prior = vaultAttempts.get(id), entry = prior && prior.until > Date.now() ? prior : { until: Date.now() + 60000, count: 0 };
+    vaultAttempts.set(id, entry); if (++entry.count > 10) return void res.status(429).json({ error: 'Too many vault attempts' }); next();
+  });
+  app.post("/api/tokens", (_req, res) => res.status(410).json({ error: "Global tokens removed. Configure OAuth using the MCP endpoint." }));
   const cookie = (req: express.Request) => /(?:^|;\s*)sid=([a-f0-9]+)/.exec(req.headers.cookie ?? "")?.[1];
   const startSession = (res: express.Response) => {
     const sid = randomBytes(32).toString("hex");
     const csrf = randomBytes(24).toString("hex");
-    sessions.set(sid, { csrf });
-    res.setHeader("Set-Cookie", `sid=${sid}; HttpOnly; SameSite=Strict; Path=/`);
+    sessions.set(sid, { csrf, userId: identityContext.getStore()!.userId });
+    res.setHeader("Set-Cookie", `sid=${sid}; HttpOnly; SameSite=Strict; Path=/${opts.oauth.issuer.protocol === "https:" ? "; Secure" : ""}`);
     return csrf;
   };
-  const eq = (a: string, b: string) => a.length === b.length && timingSafeEqual(Buffer.from(a), Buffer.from(b));
+  const eq = (a: string, b: string) => { const left = Buffer.from(a), right = Buffer.from(b); return left.length === right.length && timingSafeEqual(left, right); };
 
   const auth: express.RequestHandler = (req, res, next) => {
     const s = sessions.get(cookie(req) ?? "");
-    if (!s || !vault.unlocked) return void res.status(401).json({ error: "locked" });
+    if (!s || s.userId !== identityContext.getStore()?.userId || !vault.unlocked) return void res.status(401).json({ error: "locked" });
     if (req.method !== "GET" && !eq(String(req.headers["x-csrf-token"] ?? ""), s.csrf))
       return void res.status(403).json({ error: "bad csrf token" });
-    vault.touch();
+    if (req.method !== 'GET') { vault.touch(); session(opts.oauth.store, req, true); }
     next();
   };
 
@@ -79,8 +117,13 @@ export function startAdmin(ctx: Ctx, port: number, webDir: string, tunnel: Tunne
   // ---- session ----
   app.get("/api/status", (req, res) => {
     const s = sessions.get(cookie(req) ?? "");
-    res.json({ exists: vault.exists, unlocked: vault.unlocked && !!s, csrf: vault.unlocked && s ? s.csrf : undefined });
+    res.json({ exists: vault.exists, legacyAvailable: !!ctx.registry?.legacy.exists && !opts.oauth.store.get("migration", "legacy"), unlocked: vault.unlocked && s?.userId === identityContext.getStore()?.userId, idleExpiresAt: vault.idleExpiresAt, csrf: vault.unlocked && s?.userId === identityContext.getStore()?.userId ? s?.csrf : undefined });
   });
+  if (ctx.registry) {
+    app.post('/api/setup', wrap(async (req, res) => ({ recoveryKey: await ctx.registry!.current().initialize(String(req.body.password ?? '')), csrf: startSession(res) })));
+    app.post('/api/migrate', wrap(async (req, res) => ({ recoveryKey: await ctx.registry!.migrate(identityContext.getStore()!.userId, String(req.body.oldPassword ?? ''), String(req.body.password ?? '')), csrf: startSession(res) })));
+    app.post('/api/recover', wrap(async (req, res) => ({ recoveryKey: await ctx.registry!.current().recover(String(req.body.recovery ?? ''), String(req.body.password ?? '')), csrf: startSession(res) })));
+  }
   app.post(
     "/api/setup",
     wrap(async (req, res) => {
@@ -111,6 +154,8 @@ export function startAdmin(ctx: Ctx, port: number, webDir: string, tunnel: Tunne
     }),
   );
   app.post("/api/lock", auth, wrap(() => vault.lock()));
+  // Only explicit, CSRF-protected interaction renews idle timers. Background GET polling does not.
+  app.post("/api/activity", auth, wrap(() => ({ ok: true })));
   app.get("/api/storage", auth, (_req, res) => res.json({ dataDir: resolve(opts.dataDir) }));
 
   // ---- hosts ----
@@ -437,39 +482,29 @@ export function startAdmin(ctx: Ctx, port: number, webDir: string, tunnel: Tunne
     }),
   );
 
-  // ---- MCP tokens (shown once) ----
+  // ---- OAuth client configurations ----
+  const setupFor = (client: string, token: string) => clientSetup(client, token, { endpoint: opts.oauth.resource.href, nodePath: process.execPath, bridgePath: opts.bridgePath });
+  app.get("/api/clients", auth, wrap(() => ({ endpoint: opts.oauth.resource.href, clients: CLIENTS.map((c) => ({ ...c, ...setupFor(c.id, "<YOUR_MCP_TOKEN>") })) })));
+  app.post("/api/clients/:client", auth, wrap((req) => {
+    const client = String(req.params.client);
+    // Validate before issuing any credential.
+    setupFor(client, "<YOUR_MCP_TOKEN>");
+    if (client === "claude-desktop" && !existsSync(opts.bridgePath)) throw new Error("Build the application first: npm run build");
+    return setupFor(client, "");
+  }));
   app.get("/api/tokens", auth, wrap(() => vault.d.tokens.map((t) => ({ id: t.id, name: t.name, created: t.created }))));
-  app.post(
-    "/api/tokens",
-    auth,
-    wrap((req) => {
-      const raw = "mcp_" + randomBytes(32).toString("base64url");
-      vault.d.tokens.push({ id: randomUUID(), name: String(req.body.name || "client"), hash: sha256(raw), created: new Date().toISOString() });
-      vault.save();
-      return { token: raw };
-    }),
-  );
-  app.delete(
-    "/api/tokens/:id",
-    auth,
-    wrap((req) => {
-      vault.d.tokens = vault.d.tokens.filter((t) => t.id !== req.params.id);
-      vault.save();
-    }),
-  );
-
-  // ---- ChatGPT tunnel (OpenAI Secure MCP Tunnel) ----
-  app.get("/api/tunnel", auth, wrap(() => tunnel.status()));
-  app.put("/api/tunnel", auth, wrap((req) => tunnel.configure(req.body)));
-  app.post("/api/tunnel/install", auth, wrap(() => tunnel.install()));
-  app.post("/api/tunnel/start", auth, wrap(() => tunnel.start()));
-  app.post("/api/tunnel/stop", auth, wrap(() => tunnel.stop()));
+  // Infrastructure moved out of the personal-vault API. No legacy mutation remains.
+  app.use('/api/tunnel', (_req, res) => res.status(410).json({ error: 'Manage the instance at /identity/admin' }));
   // ---- approvals / audit / settings ----
-  app.get("/api/approvals", auth, wrap(() => approvals.list()));
+  app.get("/api/approvals", auth, wrap(() => approvals.list().filter(p => !ctx.registry || (p.userId !== identityContext.getStore()?.userId && p.approvers?.includes(identityContext.getStore()!.userId)) || (!p.approvers && p.userId === identityContext.getStore()?.userId))));
   app.post(
     "/api/approvals/:id/:d",
     auth,
     wrap((req) => {
+      if (ctx.registry) {
+        const p = approvals.list().find(p => p.id === req.params.id), user = identityContext.getStore()!.userId;
+        if (!p || (p.approvers ? p.userId === user || !p.approvers.includes(user) : p.userId !== user)) throw new Error('Approval unavailable');
+      }
       if (!approvals.decide(String(req.params.id), req.params.d === "approve" ? "approved" : "denied")) throw new Error("no longer pending");
     }),
   );
@@ -480,8 +515,10 @@ export function startAdmin(ctx: Ctx, port: number, webDir: string, tunnel: Tunne
     auth,
     wrap((req) => {
       const s = req.body;
+      const minutes = Number(s.autoLockMinutes);
+      if (!Number.isInteger(minutes) || minutes < 0 || minutes > 1440) throw new Error('Auto-lock must be a whole number from 0 to 1440 minutes (0 disables it)');
       vault.d.settings = {
-        autoLockMinutes: Math.max(0, Number(s.autoLockMinutes) || 0),
+        autoLockMinutes: minutes,
         maxOutputBytes: Math.min(1_000_000, Math.max(1024, Number(s.maxOutputBytes) || 65536)),
         approvalTimeoutSec: Math.min(600, Math.max(10, Number(s.approvalTimeoutSec) || 120)),
       };
@@ -516,6 +553,7 @@ export function startAdmin(ctx: Ctx, port: number, webDir: string, tunnel: Tunne
     auth,
     wrap((req) => {
       const items: (ImportedHost & { keyPassphrase?: string })[] = req.body.hosts ?? [];
+      if (items.some(it => it.identityFile) && session(opts.oauth.store, req)?.user.role !== 'administrator') throw new Error('Server-side key import requires an administrator');
       const keyByPath = new Map<string, string>();
       let added = 0;
       const skipped: string[] = [];
@@ -565,7 +603,7 @@ export function startAdmin(ctx: Ctx, port: number, webDir: string, tunnel: Tunne
       helperReady: process.platform === "win32" && helperReady(dataDir),
     })),
   );
-  app.post("/api/import/termius-local/setup", auth, wrap(() => setupHelper(dataDir)));
+  app.post("/api/import/termius-local/setup", (_req, res) => res.status(410).json({ error: "Install components at /identity/admin" }));
   app.post(
     "/api/import/termius-local/scan",
     auth,
